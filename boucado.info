@@ -1,0 +1,4 @@
+name = BOUCADO
+description = BOUCADO controls.
+core = 7.x
+package = BOUCADO
