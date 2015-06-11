@@ -1,0 +1,593 @@
+<?php
+
+// $Id$
+global $base_url;
+global $user;
+
+/*
+Query Debug:
+print_r($query->__toString());
+print_r($query->arguments());
+*/
+ 
+/*
+ * 
+// Username und Vorname an Javascript übergeben:
+
+	$uid = $user->uid;
+
+	$userdata = boucado_get_userdata($uid);
+	$boucado_settings = array('username' => $userdata->user);	
+	drupal_add_js(array('boucado' => $boucado_settings), 'setting');	
+*/
+
+function boucado_permission() {
+  return array(
+    'access own boucado' => array(
+      'title' => t('Access own BOUCADO'),
+    ),
+    'access all boucado' => array(
+      'title' => t('Access all BOUCADOs'),
+    ),
+  );
+}
+
+
+function boucado_menu() {
+    $items = array();
+	
+    $items['join/%'] = array(
+        'title' => 'Register',
+        'page callback' => 'boucado_register',
+        'page arguments' => array(1),
+        'access arguments' => array('access content'),
+        'type' => MENU_CALLBACK,
+    );
+	
+    $items['join'] = array(
+        'title' => 'join',
+        'page callback' => 'boucado_join',
+        'access arguments' => array('access content'),
+        'type' => MENU_CALLBACK,
+    );	
+
+    $items['boucado/testform'] = array(
+        'title' => t('BOUCADO Testform'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('boucado_test_form_form'),
+      'access callback' => TRUE,
+      'type' => MENU_CALLBACK,
+    );
+	
+	
+    $items['boucado/user'] = array(
+        'title' => t('BOUCADO User'),
+        'page arguments' => array('0'),  
+        'page callback' => 'boucado_userinfo',
+        'access arguments' => array('access own boucado'),
+        'type' => MENU_CALLBACK,
+    );
+	
+    $items['boucado/user/%'] = array(
+        'title' => t('BOUCADO User'),
+        'page arguments' => array(2),  
+        'page callback' => 'boucado_userinfo',
+        'access arguments' => array('access all boucado'),
+        'type' => MENU_CALLBACK,
+    );
+	
+	return $items;
+}
+
+function boucado_join() {
+	$_SESSION['sponsor_uid'] = "";
+	$_SESSION['sponsor_name'] = "";
+	boucado_register(1);
+	//drupal_goto('user/register');
+}
+
+function boucado_register($uid) {
+	if (boucado_check_sponsor($uid)) {
+		if (arg(2) == "") {
+			drupal_goto('<front>');
+		} else if (arg(2) == "register") {
+			drupal_goto('user/register');
+		} else {
+			drupal_goto(arg(2));
+		}			
+	} else {
+		return '<br>' . t('User "@uid" unknown.', array('@uid' => $uid));
+	} 
+}
+
+function boucado_check_sponsor($uid) {
+	$result = db_query("SELECT uid, name FROM {users} WHERE uid='" . $uid . "'");
+	$user = $result->fetchAssoc();
+	if ($user['uid']) {
+		$_SESSION['sponsor_uid'] = $user['uid'];
+		$_SESSION['sponsor_name'] = $user['name'];
+		setcookie('referral', $user['name'], time() + 3600 * 24 * 180, '/');
+		//print_r($_COOKIE['sponsor']);		
+		return true;
+	} else {
+		$result = db_query("SELECT uid, name FROM {users} WHERE name='" . $uid . "'");
+		$user = $result->fetchAssoc();
+		if ($user['name']) {
+			$_SESSION['sponsor_uid'] = $user['uid'];
+			$_SESSION['sponsor_name'] = $user['name'];
+			setcookie('referral', $user['name'], time() + 3600 * 24 * 180, '/');		
+			return true;
+		} else {
+			$_SESSION['sponsor_uid'] = '';
+			$_SESSION['sponsor_name'] = '';
+			return false;
+		}
+	}
+}
+
+
+function boucado_get_userdata($username) {
+global $user;
+	
+	if ($username=="") {$username = $user->name;}
+
+	if ($username=="Demo") {
+
+		$thisuser = new stdClass();
+		$thisuser->member_id=0;
+		$thisuser->username="demo";
+		$thisuser->first_name="Demo";
+		$thisuser->last_name="Demo";
+		$thisuser->street="Demostreet";
+		$thisuser->postal="10000";
+		$thisuser->city="Democity";
+		$thisuser->country="Democountry";
+		$thisuser->phone="123456";
+		$thisuser->email="demo@demo.com";
+		$thisuser->sponsor = 'admin';
+		$thisuser->sponsor_id = '1';
+		$thisuser->sponsor_first_name = 'BOUCADO';
+		$thisuser->sponsor_last_name = 'Admin';
+		$thisuser->upline = 'admin';
+		$thisuser->upline_id = '1';
+		$thisuser->upline_first_name = 'BOUCADO';
+		$thisuser->upline_last_name = 'Admin';		
+		
+		return $thisuser;
+	}
+
+// Member holen
+	db_set_active('boucado_matrix');
+	$query = db_select('members', 'm');
+	$query
+		->fields('m')
+  		->condition('m.username', $username, '=')
+  		->range(0, 1);
+	$result = $query->execute();
+	db_set_active();
+	
+	foreach ($result as $record) {
+  		$thisuser = $record;
+	}
+
+ // Sponsor holen:
+ 	if ($thisuser->member_id > 1) {
+ 	db_set_active('boucado_matrix');
+ 	$query = db_select('members', 'm');
+	$query
+		->fields('m')
+  		->condition('m.member_id', $thisuser->enroller_id, '=')
+  		->range(0, 1);
+	$result = $query->execute();
+
+	db_set_active();
+		
+	foreach ($result as $record) {
+  		$sponsor = $record;
+	}
+
+	$thisuser->sponsor = $sponsor->username;
+	$thisuser->sponsor_id = $sponsor->member_id;
+	$thisuser->sponsor_first_name = $sponsor->first_name;
+	$thisuser->sponsor_last_name = $sponsor->last_name;
+	
+	} else { // der Admin
+		$thisuser->sponsor = 'admin';
+		$thisuser->sponsor_id = '1';
+		$thisuser->sponsor_first_name = 'BOUCADO';
+		$thisuser->sponsor_last_name = 'Admin';
+	}
+	
+ // Upline holen
+ 
+  	if ($thisuser->member_id > 1) { // nicht der Admin
+	 	db_set_active('boucado_matrix');
+	 	$query = db_select('matrix', 'm');
+		$query
+			->fields('m')
+	  		->condition('m.member_id', $thisuser->member_id, '=')
+	  		->range(0, 1);
+		$result = $query->execute();
+			
+		foreach ($result as $record) {
+	  		$upline_id = $record;
+		}
+	
+	 	$query = db_select('members', 'm');
+		$query
+			->fields('m')
+	  		->condition('m.member_id', $upline_id->host_id, '=')
+	  		->range(0, 1);
+		$result = $query->execute();
+	
+		db_set_active();
+		
+		foreach ($result as $record) {
+	  		$upline = $record;
+		}
+		
+		$thisuser->upline = $upline->username;
+		$thisuser->upline_id = $upline->member_id;
+		$thisuser->upline_first_name = $upline->first_name;
+		$thisuser->upline_last_name = $upline->last_name;
+	
+	} else { // der Admin
+		$thisuser->upline = 'admin';
+		$thisuser->upline_id = '1';
+		$thisuser->upline_first_name = 'BOUCADO';
+		$thisuser->upline_last_name = 'Admin';
+	}
+	
+	
+	return $thisuser;
+}
+
+
+function boucado_mail($key, &$message, $params) {
+  switch ($key) {
+    case 'kuendigen':
+      // note: data can be passed to this function in the $params array
+      $message['subject'] = 'angelio Kündigung';
+      $message['body'] = "Hallo " . $params['Vorname'] . "!\n\nDein Vertrag mit der AIG-Nummer " . $params['Polizze'] . " wird gekündigt.\n\nDein angelio Team.";
+      break;    
+  }
+}
+
+
+
+function boucado_theme() {
+  return array(
+    'user_profile_form' => array(
+      // Forms always take the form argument.
+      'arguments' => array('form' => NULL),
+      'render element' => 'form',
+      'template' => 'user-profile-edit',
+    ),
+  );
+ }
+
+function boucado_mynetworks($net_id, $membername) {
+
+	$member = boucado_get_userdata($membername);
+	
+	db_set_active('boucado_matrix');
+		
+	$refdata = array();
+	
+	// Sponsor Links:
+	$sponsorquery = db_select('network_members', 'm');
+	$sponsorquery
+		->fields('m')
+		->condition('m.net_id',$net_id,'=')
+		->condition('m.member_id',$member->sponsor_id,'=');
+	$sponsorresult = $sponsorquery->execute();		
+
+	foreach ($sponsorresult as $sponsorrecord) {
+		$refdata['sponsor']['first_name'] = $member->sponsor_first_name;
+		$refdata['sponsor']['last_name'] = $member->sponsor_last_name;
+		$refdata['sponsor']['referral'] = $sponsorrecord->referral;
+	}
+	
+	
+	// Upline Links:
+	$uplinequery = db_select('network_members', 'm');
+	$uplinequery
+		->fields('m')
+		->condition('m.net_id',$net_id,'=')
+		->condition('m.member_id',$member->upline_id,'=');
+	$uplineresult = $uplinequery->execute();		
+
+	foreach ($uplineresult as $uplinerecord) {
+		$refdata['upline']['first_name'] = $member->upline_first_name;
+		$refdata['upline']['last_name'] = $member->upline_last_name;
+		$refdata['upline']['referral'] = $uplinerecord->referral;
+	}
+	
+	// Eigener Links:
+	$selfquery = db_select('network_members', 'm');
+	$selfquery
+		->fields('m')
+		->condition('m.net_id',$net_id,'=')
+		->condition('m.member_id',$member->member_id,'=');
+	$selfresult = $selfquery->execute();		
+	
+	foreach ($selfresult as $selfrecord) {
+		$refdata['self']['referral'] = $selfrecord->referral;
+	}
+	$refdata['self']['member_id'] = $member->member_id;
+	
+	db_set_active();
+	return $refdata;
+	
+}
+
+function boucado_init() {
+	
+    drupal_add_css(drupal_get_path('module', 'boucado') . '/boucado.css');
+}
+
+
+function fdate($datetimestring = '1970-01-01 00:00:00', $format = 'U') {
+  // Create a datetime object, return it formatted
+  // If you want to give credit for this somewhere, thanks.
+  // You really don't have to though; this is kinda obvious
+  $dt = new DateTime($datetimestring);
+  return $dt->format($format);
+} 
+
+function boucado_user($op, &$edit, &$account, $category) {
+	if ($op=="delete") {
+		/*
+		// Benutzer aus boucado löschen
+		db_set_active('boucado_matrix');
+
+		$num_deleted = db_delete('user')
+  			->condition('uid', $account->uid)
+  			->execute();
+
+		db_set_active();	
+		
+		drupal_set_message("Der Benutzer wurde aus Golfer's Life gelöscht.");
+		 * 
+		 */
+	}
+}
+
+function boucado_sendmail() {
+
+	$uid = $user->uid;
+	$userdata = boucado_get_userdata($uid);
+			
+	// E-Mail senden:
+	
+	$params = array(
+  		'Vorname' => $userdata['strVName_O'],
+  		'Polizze' => $polizze
+	);
+	
+	$to = $userdata['strEmail_O'] . ',office@boucado.space';
+	
+	$sent = drupal_mail('boucado', 'kuendigen', $to , language_default(), $params, 'office@boucado.space');
+	
+	if($sent){
+		drupal_set_message('Ein E-Mail wurde zu Ihnen gesendet.', 'status');	
+	} else {
+		drupal_set_message('E-Mail konnte nicht gesendet werden.', 'error');
+	}
+	
+}
+
+function boucado_courses(){
+	$output = "";
+	db_set_active('boucado');
+	
+		
+	$query = db_select('courses', 'c');
+	$query
+  		->fields('c', array('course', 'realname', 'par', 'CR_middle', 'slope_middle', 'URL', 'premium'))
+  		->orderBy('c.course', 'ASC');
+	$result = $query->execute();
+	db_set_active();
+		
+	$output .= "<table id='tbl_courses'><tr><th>" . t('Course') . "</th><th>" . t('Real Name') . "</th><th>Par</th><th>CR</th><th>Slope</th><th>Premium</th></tr>";
+	foreach ($result as $row) {
+		if ($row->premium) {$premium = "*";} else {$premium = "";}
+		$output .= "<tr><td>" . $row->course . "</td><td><a target='_blank' href='" . $row->URL . "'>" . $row->realname . "</a></td><td>" . $row->par. "</td><td>" . $row->CR_middle . "</td><td>" . $row->slope_middle . "</td><td>" . $premium . "</td></tr>";
+	}
+	$output .= "</table>";
+	
+	return $output;
+}
+
+function boucado_userinfo($uid) {
+global $user;
+	
+	if($uid!='0') {
+		$userdata = boucado_get_userdata($uid);
+	} else {
+		$uid = $user->uid;
+		$userdata = boucado_get_userdata($uid);
+	}
+	
+	$output = "Username: " . $userdata->user . "<br>";
+	$output .= "Handicap: " . $userdata->hcp . "<br>";
+
+
+	$output .= "<hr><br><h3>Letzte Runden:</h3>";
+	$output .= "<div id='user_rounds'>";
+
+	db_set_active('boucado_matrix');
+	
+$query = db_select('rounds')->extend('PagerDefault'); 
+ $query->fields('rounds', array('id', 'course', 'date', 'score', 'hcpdiff'));    
+ $query->condition('uid', $uid, '=');
+ $query->orderBy('id', 'DESC');
+ $result = $query ->limit(10)->execute()->fetchAll();
+db_set_active();
+ $output .= "<table id='tbl_rounds'><tr><th>Course</th><th>Date</th><th>Score</th><th>HCP Diff</th></tr>";
+ foreach ($result as $row) {
+	$output .= "<tr><td>" . $row->course . "</td><td>" . $row->date . "</td><td>" . $row->score . "</td><td>" . $row->hcpdiff . "</td></tr>";
+ }
+ $output .= "</table><br>"; 
+
+$output .= theme('pager', array('tags' => array()));
+$output .= "</div> <!-- user_rounds -->";
+return $output; 
+
+}
+
+function boucado_network_form($form, &$form_state, $infos) {
+		
+	$net_id = $infos['net_id'];
+	$member_id = $infos['member_id'];	
+	$link = "";
+		
+	db_set_active('boucado_matrix');
+	$query = db_select('network_members', 'm');
+	$query
+		->fields('m')
+		->condition('m.net_id',$net_id,'=')
+		->condition('m.member_id',$member_id,'=');
+	$result = $query->execute();		
+
+	foreach ($result as $record) {
+		$link = $record->referral;
+	}
+	
+	db_set_active();
+	
+	$form['network']['net_id'] = array(
+          '#type' => 'hidden',
+          '#default_value' => $net_id,
+            );
+            
+ 	$form['network']['member_id'] = array(
+          '#type' => 'hidden',
+          '#default_value' => $member_id,
+            );
+				
+	$form['network']['referral'] = array(
+          '#type' => 'textfield',
+          '#title' => t('Your referral code:'),
+          '#default_value' => $link,
+            );
+            
+    $form['submit'] = array(
+          '#type' => 'submit',
+          '#value' => t('Submit'),
+        );
+        $form['#submit'][] = 'boucado_network_form_submit';
+
+        return $form;
+}
+
+function boucado_network_form_submit($form, &$form_state) {
+	$net_id = $form_state['values']['net_id'];
+	$member_id = $form_state['values']['member_id'];
+	$referral = $form_state['values']['referral'];
+	
+	db_set_active('boucado_matrix');
+	$query = db_select('network_members', 'm');
+	$query
+		->fields('m')
+		->condition('m.net_id',$net_id,'=')
+		->condition('m.member_id',$member_id,'=');
+	$result = $query->execute();		
+
+	if ($result->rowCount() > 0) {
+		db_update('network_members')
+			->fields(array('referral' => $referral,))
+  			->condition('net_id', $net_id, '=')
+			->condition('member_id', $member_id, '=')
+  			->execute();
+	} else {
+		db_insert('network_members')
+			->fields(array('net_id' => $net_id,'member_id' => $member_id,'referral' => $referral,))
+			->execute();
+	}
+	db_set_active();
+}   
+	
+function boucado_test_form_form($form, &$form_state, $no_js_use = FALSE) {
+
+        $form['add_more'] = array(
+          '#type' => 'button',
+          '#value' => t('Add More'),
+          '#ajax' => array(
+            'callback' => 'boucado_test_form_ajax_simplest_callback',
+            'wrapper' => 'replace-this',
+            'method' => 'replace',
+           ),
+        );
+
+        $form['names'] = array(
+          '#type' => 'fieldset',
+          '#title' => 'Names',
+          '#prefix' => '<div id="replace-this">',
+          '#suffix' => '</div>',
+          '#tree' => TRUE,
+        );
+
+        // build the initial field if this is not being rebuilt 
+        // from ajax request
+        if (!array_key_exists('clicked_button', $form_state)) {
+          $form['names'][0] = array('#type' => 'fieldset');
+          $form['names'][0]['name'] = array(
+            '#type' => 'textfield',
+            '#title' => t('Name'),
+            '#parent' => 'test',
+          );
+          $form['names'][0]['select'] = array(
+            '#type' => 'select',
+            '#title' => t('Select'),
+            '#parent' => 'test',
+            '#options'=>array('1'=>'One', '2'=>'Two', '3'=>'Three'),
+          );
+        } else {
+          // otherwise add the fields for each existing value
+          foreach ($form_state['input']['names'] as $i => $value) {
+            $form['names'][$i] = array('#type' => 'fieldset');
+            $form['names'][$i]['name'] = array(
+              '#type' => 'textfield',
+              '#title' => t('Name'),
+              '#default_value' => $form_state['input']['names'][$i]['name'],
+            );
+            $form['names'][$i]['select'] = array(
+              '#type' => 'select',
+              '#title' => t('Select'),
+              '#default_value' => $form_state['input']['names'][$i]['select'],
+              '#options'=>array('1'=>'One', '2'=>'Two', '3'=>'Three'),
+            );
+          }
+
+          // add the additional field for a new entry
+          $last = count($form_state['input']['names']);
+          $form['names'][$last] = array('#type' => 'fieldset');
+          $form['names'][$last]['name'] = array(
+              '#type' => 'textfield',
+              '#title' => t('Name'),
+          );
+          $form['names'][$last]['select'] = array(
+              '#type' => 'select',
+              '#title' => t('Select'),
+              '#options'=>array('1'=>'One', '2'=>'Two', '3'=>'Three'),
+          );
+        }
+
+        $form['submit'] = array(
+          '#type' => 'submit',
+          '#value' => t('Submit'),
+        );
+        $form['#submit'][] = 'boucado_test_form_add_more_submit';
+
+        return $form;
+    }
+
+    function boucado_test_form_ajax_simplest_callback($form, &$form_state) {
+        return $form['names'];
+    }
+
+    function boucado_test_form_add_more_submit($form, &$form_state) {
+        print_r($form_state['values']);
+        exit();
+    }
