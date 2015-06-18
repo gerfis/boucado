@@ -36,6 +36,51 @@ function boucado_permission() {
 function boucado_menu() {
     $items = array();
 	
+  $items['admin/boucado'] = array(
+    'title' => 'BOUCADO',
+    'description' => 'This is the parent item',
+    'position' => 'left',
+    'weight' => -100,
+    'page callback' => 'system_admin_menu_block_page',
+    'access arguments' => array('administer site configuration'),
+    'file' => 'system.admin.inc',
+    'file path' => drupal_get_path('module', 'system'),
+  );
+  // Need at least one child item before your section will appear.
+  $items['admin/boucado/sync'] = array(
+    'title' => 'User Synchronization',
+    'description' => 'Drupal <-> RUNMLM synchronize',
+    'page callback' => 'boucado_sync_users',
+    'access arguments' => array('administer site configuration'),
+  );
+
+  
+  
+  $items['boucado/downline/%'] = array(
+    'title' => 'My Downline',
+    'description' => 'My BOUCADO downline',
+    'page callback' => 'boucado_downline',
+    'page arguments' => array(2),
+    'access arguments' => array('access own boucado'),
+  );
+  
+    	
+  $items['boucado/position/%/%'] = array(
+    'title' => 'New Position',
+    'description' => 'Next free position',
+    'page callback' => 'boucado_TestInsert',
+    'page arguments' => array(2,3),
+    'access arguments' => array('administer site configuration'),
+  );
+
+
+    $items['boucado/resettests'] = array(
+        'title' => 'Testdaten gelöscht',
+        'page callback' => 'boucado_resettests',
+        'access arguments' => array('administer site configuration'),
+        'type' => MENU_CALLBACK,
+    );
+	  	
     $items['join/%'] = array(
         'title' => 'Register',
         'page callback' => 'boucado_register',
@@ -240,6 +285,53 @@ global $user;
 	
 	
 	return $thisuser;
+}
+
+
+function boucado_sync_users(){
+	
+	// Zuerst alle Drupal user nach boucado_matrix kopieren:
+	$sql = "SELECT uid, name FROM {users} WHERE uid>0";
+
+	$result = db_query($sql)->fetchAll();
+	
+	$output = "";
+	db_set_active('boucado_matrix');
+	db_truncate('drupal_users')->execute();
+	
+	  foreach ($result as $row) { 
+		$sql = "INSERT INTO drupal_users (uid,name) VALUES('" . $row->uid . "','" . $row->name . "')";
+		$ok = db_query($sql);
+
+	  }  
+
+	// Dann alle neuen Members suchen und ev. neu in Drupal anlegen:
+	$sql = "SELECT username, email from members WHERE username NOT IN (SELECT name from drupal_users)";
+	$result = db_query($sql)->fetchAll();
+
+	if (!$result) {$output = "<h2>Keine neuen User angemeldet.</h2><p>&nbsp;</p>"; }
+
+	db_set_active();	
+	
+	  foreach ($result as $row) { 
+		//set up the user fields
+		$fields = array(
+		  'name' => $row->username,
+		  'mail' => $row->email,
+		  'pass' => $row->username,
+		  'status' => 1,
+		  'init' => $row->email,
+		  'roles' => array(
+		    DRUPAL_AUTHENTICATED_RID => 'authenticated user',
+		  ),
+		);
+		 
+		//the first parameter is left blank so a new user is created
+		$account = user_save('', $fields);
+		$output .= $account->uid . " -> " . $account->name . "</br>";		 
+	  }  	
+	
+	return $output;
 }
 
 
@@ -591,3 +683,268 @@ function boucado_test_form_form($form, &$form_state, $no_js_use = FALSE) {
         print_r($form_state['values']);
         exit();
     }
+	
+function boucado_downline($uid) {
+	
+	$output = boucado_downline_tree($uid,1);
+	
+	return $output;
+}
+
+
+function boucado_downline_tree($uid,$level=1) {
+	if ($level>9) {return;} // Abbruch nach 9 Leveln
+	
+	db_set_active('boucado_matrix');
+	$sql = "SELECT m.member_id, n.m_level, n.username, n.first_name, n.last_name FROM {test_matrix} m JOIN {test_members} n ON m.member_id = n.member_id WHERE host_id=" . $uid . " ORDER by m.member_id";
+	$result = db_query($sql);
+	db_set_active();
+	$output = "";
+	if ($result->rowCount()) {
+		$count = $result->rowCount();
+  		foreach ($result as $row) {
+  				$output .= $level . '<span class="level' . $level . ' stufe' . $row->m_level . ' istaktiv" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id . ')</span><br>' . boucado_downline_tree($row->member_id,$level+1);
+  		}
+ 		db_set_active();
+		return $output;
+	} else {
+		db_set_active();
+		return "";
+	}
+}
+
+
+function boucado_resettests() {
+	db_set_active('boucado_matrix');	
+	$result = db_query("DELETE FROM {test_members} WHERE member_id > 1");
+	$result = db_query("DELETE FROM {test_matrix} WHERE member_id > 1");	
+	db_set_active();
+	$output = boucado_downline_tree(1,1);
+	return "<p>Testdaten gelöscht.</p>" . $output;
+}
+
+function new_TestMember($sponsor_id) {
+	db_set_active('boucado_matrix');
+	$result = db_query("SELECT Vorname FROM {namen} ORDER BY rand() LIMIT 1;");
+	$vorname = $result->fetchCol();
+	$result = db_query("SELECT Nachname FROM {namen} ORDER BY rand() LIMIT 1;");
+	$nachname = $result->fetchCol();
+	$username = substr(strtolower($vorname[0]), 0 , 3) . substr(strtolower($nachname[0]), 0 , 3) . rand(0,99);
+	$username = $sponsor_id . "_" . rand(0,9999);
+	
+	// Insert in table
+	try {
+		$member_id = db_insert('test_members')
+			->fields(array('sponsor_id','m_level','username','first_name','last_name'))
+			->values(array(
+				'sponsor_id' => $sponsor_id,
+				'm_level' => 2,
+				'username' => $username,
+				'first_name' => $vorname[0],
+				'last_name' => $nachname[0],
+				'sponsored' => REQUEST_TIME))
+			->execute();
+		db_set_active();
+		return $member_id;
+	} catch (PDOException $e) { // username schon vergeben?
+		dpm($e->getMessage());
+		db_set_active();
+		return 0;
+	}
+}
+
+ function boucado_TestInsert($sponsor_id, $anz){
+	for ($i=1; $i <= $anz; $i++) { 	
+		if ($sponsor_id == -1) { // Sponsor aus DB holen, sonst den angegebenen $sponsor verwenden
+			db_set_active('boucado_matrix');
+			$result = db_query("SELECT member_id FROM {test_members} ORDER BY rand() LIMIT 1;");
+			$sponsor = $result->fetchCol();
+			$sponsor_id = $sponsor[0];
+			db_set_active();
+		} 	
+		$member_id = new_TestMember($sponsor_id);
+		boucado_inMatrix($member_id, $sponsor_id);
+	}
+	$output = boucado_downline_tree(1,1);
+	
+	return $output;
+}
+
+function boucado_inMatrix($member_id, $sponsor_id) {
+
+/*
+	db_set_active('boucado_matrix');
+	
+	// zuerst nach der richtigen Reihe von oben suchen
+	$result = db_query("SELECT count(*) FROM {test_members} WHERE sponsor_id = " . $sponsor_id);
+	$sponsors = $result->fetchCol();
+	$sponsored = $sponsors[0];
+	if ($sponsored > 3) { // erste Reihe voll, sonst die übergebene $sponsor_id nehmen und mal auffüllen
+		$nextline = $sponsored % 3;
+	
+		$result = db_query("SELECT member_id FROM {test_matrix} WHERE host_id = '" . $sponsor_id . "'ORDER BY member_id LIMIT " . $nextline . ",1");
+		$lines = $result->fetchCol();
+		if ($lines) {$sponsor_id = $lines[0];}
+	}	
+
+	db_set_active();
+*/
+
+	$nextone = array();
+	$nextLevelIds = getNextLevelIds($nextone, $sponsor_id);
+	usort($nextone, 'compareIds'); // zuerst von links nach rechts sortieren
+	usort($nextone, 'compareCount');  // dann nach dem wenigsten downlines
+	$host_id = $nextone[0]['uid'];
+	
+	db_set_active('boucado_matrix');
+	$matrix_id = db_insert('test_matrix')
+	->fields(array('member_id','host_id'))
+	->values(array('member_id' => $member_id, 'host_id' => $host_id))
+	->execute();
+	
+	db_update('test_members')
+	->fields(array('last_hosted' => date("Y-m-d H:i:s", time())))
+	->condition('member_id',$host_id,'=')
+	->execute();
+	
+	db_set_active();	
+	
+	update_upline($member_id);
+
+}
+
+function getFirstLevelCount($id) {
+	db_set_active('boucado_matrix');
+	$result = db_query("SELECT count(*) FROM {test_matrix} WHERE host_id = '" . $id . "'")->fetchCol();
+	db_set_active();
+	return $result[0];
+}
+
+function getSecondLevelCount($id){
+	db_set_active('boucado_matrix');
+	
+	// mal alle direkten downlines holen:
+	$result = db_query("SELECT member_id FROM {test_matrix} WHERE host_id = '" . $id . "' order by member_id");
+
+	if ($result->rowCount()) {
+		$ids_anz = array();
+		$anzahlen = array();
+		$host_ids = '';
+		$i = 0;
+		$max_anz = 0;
+		$min_anz = 0;
+		foreach ($result as $row) {
+			// wie viele downlines haben die in der ersten Reihen schon?
+			$result1 = db_query("SELECT host_id, count(*) as anz FROM {test_matrix} WHERE host_id = '" . $row->member_id . "' group by host_id order by count(*), host_id");
+			if ($result1->rowCount()) { // wenn überhaupt, dann
+				$anz = $result1->fetchCol(1);
+				$host_id = $result1->fetchCol(0);
+				$ids_anz[] = array('host_id' => $row->member_id, 'anz' => $anz[0]);
+				$anzahlen[] = $anz[0];
+				$host_ids .= $row->member_id . ',';
+				$i++;
+			} else {
+				$anzahlen[] = 0;
+				$ids_anz[] = array('host_id' => $row->member_id, 'anz' => 0);
+			}
+		}
+		if ($i > 0) {
+			$max_anz = max($anzahlen);
+			$min_anz = min($anzahlen);
+			$host_ids = substr($host_ids,0,strlen($host_ids)-1);
+			usort($ids_anz, 'compareHostIds'); // host_ids aufsteigend sortieren		
+			usort($ids_anz, 'compareHosts'); // nach Anzahl an downlines sortieren, absteigend
+		}
+	} else {
+		$ids_anz = NULL;
+		$min_anz = 0;
+		$max_anz = 0;
+	}
+	
+	db_set_active();
+	return array('ids_anz' => $ids_anz, 'host_ids' => $host_ids, 'max_anz' => $max_anz, 'min_anz' => $min_anz);
+}
+
+function getNextLevelIds(&$nextone, $sponsor_id) {
+	
+	$first_level_count = getFirstLevelCount($sponsor_id);
+	
+	if ($first_level_count < 3) { // erste Reihe ist noch nicht voll
+		$nextone[] = array('uid' => $sponsor_id);
+	} else {
+	
+		$second_level_counts = getSecondLevelCount($sponsor_id);
+		if ($second_level_counts['min_anz'] < 3) { // zweite Reihe ist noch nicht voll
+			$nextone[] = array('uid' => $second_level_counts['ids_anz'][0]['host_id']); // den, mit den wenigsten zurück geben
+		} else { // zweite Reihe ist voll, wer ist der Nächste? Wer hat noch nicht, wer will nochmal?
+			db_set_active('boucado_matrix');	
+			// wer sind die 3 Kandidaten?
+			$result = db_query("SELECT member_id FROM {test_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") order by last_hosted asc, member_id");
+			$geschafft = 0;
+			foreach ($result as $row) {
+				$next_id = $result->fetchCol();
+				$first_level_count = getFirstLevelCount($next_id[0]);
+				if ($first_level_count < 3) {
+					$nextone[] = array('uid' => $next_id['0']);
+					$geschafft = 1;
+					db_set_active();
+					return;
+				}
+			}
+			if (!$geschafft) {
+				db_set_active('boucado_matrix');
+				$result = db_query("SELECT member_id FROM {test_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") ORDER by rand() LIMIT 1");
+				$next_id = $result->fetchCol();
+				db_set_active();
+				getNextLevelIds($nextone, $next_id[0]);				
+			}
+			
+	 	}
+	}
+}
+
+// Upline rekursiv bis zur 9. Ebene aktualisieren
+function update_upline($member_id, $level = 1) {
+	if (($member_id == "0") || ($level > 9)) {
+		return; 
+	} else {
+		db_set_active('boucado_matrix');
+		$result = db_query("SELECT host_id FROM {test_matrix} WHERE member_id = " . $member_id);
+		$host = $result->fetchCol();
+		$host_id = $host[0];		
+		db_update('test_members')
+		->fields(array('last_downline' => date("Y-m-d H:i:s", time())))
+		->condition('member_id',$host_id,'=')
+		->execute();
+		db_set_active();
+		update_upline($host_id, $level++);		
+	}
+		
+}
+function compareCount($a, $b)
+{
+  return $a['count'] - $b['count'];
+}
+
+function compareIds($a, $b)
+{
+  return $b['end'] - $a['end'];
+}
+
+function compareHosts($a, $b)
+{
+  return $a['anz'] - $b['anz'];
+}
+
+function compareHostIds($a, $b)
+{
+  return $b['host_id'] - $a['host_id'];
+}
+
+function print_pre($p,$titel="") {
+	print $titel . ": "; 
+	print "<pre>";
+	print_r($p);
+	print "</pre>";
+}
+
