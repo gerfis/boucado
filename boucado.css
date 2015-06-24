@@ -1,2 +1,52 @@
 body {}
 
+/* Downlines */
+
+.eigen {
+	border:1px solid #FF3521;
+}
+
+.level1 {
+	background-color:#FCC521;
+}
+
+.level2 {
+	background-color:#ddd;
+}
+
+.level3 {
+	background-color:#ccc;
+}
+
+.level4 {
+	background-color:#bbb;
+}
+
+.level5 {
+	background-color:#aaa;
+}
+
+.level6 {
+	background-color:#999;
+}
+
+.level7 {
+	background-color:#888;
+}
+
+.level8 {
+	background-color:#777;
+}
+
+.level9 {
+	background-color:#666;
+}
+
+.schwebend {
+	border:1px dashed #666;
+} 
+
+.istaktiv-1,
+a.istaktiv-1 {
+	background-color:#ff3521;
+}

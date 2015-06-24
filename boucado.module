@@ -1,5 +1,7 @@
 <?php
 
+require_once('user-forms.inc');
+
 // $Id$
 global $base_url;
 global $user;
@@ -36,6 +38,7 @@ function boucado_permission() {
 function boucado_menu() {
     $items = array();
 	
+/*
   $items['admin/boucado'] = array(
     'title' => 'BOUCADO',
     'description' => 'This is the parent item',
@@ -54,17 +57,24 @@ function boucado_menu() {
     'access arguments' => array('administer site configuration'),
   );
 
-  
+ */
   
   $items['boucado/downline/%'] = array(
     'title' => 'My Downline',
     'description' => 'My BOUCADO downline',
     'page callback' => 'boucado_downline',
     'page arguments' => array(2),
-    'access arguments' => array('access own boucado'),
+    'access arguments' => array('access all boucado'),
   );
   
-    	
+  $items['boucado/downline'] = array(
+    'title' => 'My Downline',
+    'description' => 'My BOUCADO downline',
+    'page callback' => 'boucado_downline',
+    'page arguments' => array(2),    
+    'access arguments' => array('access own boucado'),
+  );
+      	
   $items['boucado/position/%/%'] = array(
     'title' => 'New Position',
     'description' => 'Next free position',
@@ -96,6 +106,23 @@ function boucado_menu() {
         'type' => MENU_CALLBACK,
     );	
 
+  $items['payment/success/%'] = array(
+    'title' => t('Successful BOUCADO payment!'),
+    'description' => t('Successful BOUCADO payment!'),
+    'page callback' => 'boucado_payment_success',
+    'page arguments' => array(2),
+    'access arguments' => array('access content'),
+  );
+  
+  $items['payment/cancel'] = array(
+    'title' => t('BOUCADO payment canceled'),
+    'description' => t('BOUCADO payment canceled'),
+    'page callback' => 'boucado_payment_cancel',
+    'access arguments' => array('access content'),
+  );
+  
+  
+ 
     $items['boucado/testform'] = array(
         'title' => t('BOUCADO Testform'),
       'page callback' => 'drupal_get_form',
@@ -128,7 +155,7 @@ function boucado_join() {
 	$_SESSION['sponsor_uid'] = "";
 	$_SESSION['sponsor_name'] = "";
 	boucado_register(1);
-	//drupal_goto('user/register');
+	drupal_goto('user/register');
 }
 
 function boucado_register($uid) {
@@ -151,7 +178,7 @@ function boucado_check_sponsor($uid) {
 	if ($user['uid']) {
 		$_SESSION['sponsor_uid'] = $user['uid'];
 		$_SESSION['sponsor_name'] = $user['name'];
-		setcookie('referral', $user['name'], time() + 3600 * 24 * 180, '/');
+		setcookie('sponsor_name', $user['name'], time() + 3600 * 24 * 180, '/');
 		//print_r($_COOKIE['sponsor']);		
 		return true;
 	} else {
@@ -160,7 +187,7 @@ function boucado_check_sponsor($uid) {
 		if ($user['name']) {
 			$_SESSION['sponsor_uid'] = $user['uid'];
 			$_SESSION['sponsor_name'] = $user['name'];
-			setcookie('referral', $user['name'], time() + 3600 * 24 * 180, '/');		
+			setcookie('sponsor_name', $user['name'], time() + 3600 * 24 * 180, '/');		
 			return true;
 		} else {
 			$_SESSION['sponsor_uid'] = '';
@@ -170,6 +197,22 @@ function boucado_check_sponsor($uid) {
 	}
 }
 
+function boucado_get_username($member_id) {
+// Member holen
+	db_set_active('boucado_matrix');
+	$query = db_select('members', 'm');
+	$query
+		->fields('m')
+  		->condition('m.member_id', $member_id, '=')
+  		->range(0, 1);
+	$result = $query->execute();
+	db_set_active();
+	
+	foreach ($result as $record) {
+  		$thisuser = $record;
+	}	
+	return $thisuser->username;
+}
 
 function boucado_get_userdata($username) {
 global $user;
@@ -253,29 +296,34 @@ global $user;
 	  		->condition('m.member_id', $thisuser->member_id, '=')
 	  		->range(0, 1);
 		$result = $query->execute();
+
+		if ($result->rowCount()) {	
+			foreach ($result as $record) {
+		  		$upline_id = $record;
+			}
+		
+		 	$query = db_select('members', 'm');
+			$query
+				->fields('m')
+		  		->condition('m.member_id', $upline_id->host_id, '=')
+		  		->range(0, 1);
+			$result = $query->execute();
+		
+			foreach ($result as $record) {
+		  		$upline = $record;
+			}
 			
-		foreach ($result as $record) {
-	  		$upline_id = $record;
+			$thisuser->upline = $upline->username;
+			$thisuser->upline_id = $upline->member_id;
+			$thisuser->upline_first_name = $upline->first_name;
+			$thisuser->upline_last_name = $upline->last_name;
+		} else { // noch nicht platzert
+			$thisuser->upline = '';
+			$thisuser->upline_id = -1;
+			$thisuser->upline_first_name = '';
+			$thisuser->upline_last_name = '';			
 		}
-	
-	 	$query = db_select('members', 'm');
-		$query
-			->fields('m')
-	  		->condition('m.member_id', $upline_id->host_id, '=')
-	  		->range(0, 1);
-		$result = $query->execute();
-	
-		db_set_active();
-		
-		foreach ($result as $record) {
-	  		$upline = $record;
-		}
-		
-		$thisuser->upline = $upline->username;
-		$thisuser->upline_id = $upline->member_id;
-		$thisuser->upline_first_name = $upline->first_name;
-		$thisuser->upline_last_name = $upline->last_name;
-	
+		db_set_active();	
 	} else { // der Admin
 		$thisuser->upline = 'admin';
 		$thisuser->upline_id = '1';
@@ -283,7 +331,7 @@ global $user;
 		$thisuser->upline_last_name = 'Admin';
 	}
 	
-	
+
 	return $thisuser;
 }
 
@@ -337,26 +385,26 @@ function boucado_sync_users(){
 
 function boucado_mail($key, &$message, $params) {
   switch ($key) {
-    case 'kuendigen':
+    case 'upline':
       // note: data can be passed to this function in the $params array
-      $message['subject'] = 'angelio Kündigung';
-      $message['body'] = "Hallo " . $params['Vorname'] . "!\n\nDein Vertrag mit der AIG-Nummer " . $params['Polizze'] . " wird gekündigt.\n\nDein angelio Team.";
-      break;    
-  }
+      $message['subject'] = "Deine BOUCADO Downline wächst!";
+      $body = "Hallo " . $params['Uplinename'] . "!\n\nGratuliere, du hast ein neues Mitglied in deiner Downline bekommen:\n\n";
+	  $body .= "Sponsor: ". $params['Sponsorname']. "\n\n";
+	  $body .= "Username: ". $params['Neueruser']. "\n\n";
+	  $body .= "\n\nDenk daran, jedes neue Mitglied kann für einen Wachstumsschub in Deiner gesamten Downline verantwortlich sein.\nAlso informiere so viele Menschen wie möglich über unseren Verein, um Deinen Nebenverdienst zu erhöhen.";
+      $body .= "\n\nDein BOUCADO Team.";
+      $message['body'] = $body;
+      break;	  
+   case 'neuer':
+      $message['subject'] = "Neue Anmeldung bei BOUCADO: " . $params['Neueruser'];
+      $body = "Sponsor: " . $params['Sponsorname']. "\n\n";
+	  $body .= "Username: ". $params['Neueruser']. "\n\n";
+      $message['body'] = $body;
+      break;	    
+  }    
 }
 
 
-
-function boucado_theme() {
-  return array(
-    'user_profile_form' => array(
-      // Forms always take the form argument.
-      'arguments' => array('form' => NULL),
-      'render element' => 'form',
-      'template' => 'user-profile-edit',
-    ),
-  );
- }
 
 function boucado_mynetworks($net_id, $membername) {
 
@@ -427,22 +475,18 @@ function fdate($datetimestring = '1970-01-01 00:00:00', $format = 'U') {
   return $dt->format($format);
 } 
 
-function boucado_user($op, &$edit, &$account, $category) {
-	if ($op=="delete") {
-		/*
-		// Benutzer aus boucado löschen
-		db_set_active('boucado_matrix');
+function boucado_user_delete($account) {
+	// Benutzer aus boucado matrix löschen
+	db_set_active('boucado_matrix');
 
-		$num_deleted = db_delete('user')
-  			->condition('uid', $account->uid)
-  			->execute();
+	$num_deleted = db_delete('members')
+		->condition('username', $account->name)
+		->execute();
 
-		db_set_active();	
-		
-		drupal_set_message("Der Benutzer wurde aus Golfer's Life gelöscht.");
-		 * 
-		 */
-	}
+	db_set_active();	
+	
+	drupal_set_message("Der Benutzer wurde aus der BOUCADO Matrix gelöscht.");
+
 }
 
 function boucado_sendmail() {
@@ -685,25 +729,55 @@ function boucado_test_form_form($form, &$form_state, $no_js_use = FALSE) {
     }
 	
 function boucado_downline($uid) {
+global $user;
+
+	if($uid!='') {
+		$userdata = boucado_get_userdata($uid);
+	} else {
+		$uid = $user->name;
+		$userdata = boucado_get_userdata($uid);
+	}	
 	
-	$output = boucado_downline_tree($uid,1);
+	$statistik = array();
+	$output = "";
+	
+	$tree = boucado_downline_tree($statistik, $userdata->member_id, $userdata->member_id,1);
+	
+	$levels = array('1' => 0, '2' => 0, '3' => 0, '4' => 0, '5' => 0, '6' => 0, '7' => 0, '8' => 0, '9' => 0);
+	$gesamt = 0;
+	
+	foreach ($statistik as $level) {
+		$levels[$level['level']] = $levels[$level['level']] + $level['count'];  
+		$gesamt += $level['count']; 
+	}
+	
+	for ($i = 1; $i < 10; $i++) {
+		$output .= "Level " . $i . ": " . $levels[$i] . "<br>";
+	}
+	$output .= "<p><b>Gesamt: " . $gesamt . "</b></p>";
+	$output .= "<br><hr><br>";
+	
+	$output .= $tree;
 	
 	return $output;
 }
 
 
-function boucado_downline_tree($uid,$level=1) {
+function boucado_downline_tree(&$statistik, $uid, $sponsor_id, $level=1) {
 	if ($level>9) {return;} // Abbruch nach 9 Leveln
 	
 	db_set_active('boucado_matrix');
-	$sql = "SELECT m.member_id, n.m_level, n.username, n.first_name, n.last_name FROM {test_matrix} m JOIN {test_members} n ON m.member_id = n.member_id WHERE host_id=" . $uid . " ORDER by m.member_id";
+	$sql = "SELECT m.member_id, n.bonuslevel, n.username, n.first_name, n.last_name, n.sponsor_id FROM {test_matrix} m JOIN {test_members} n ON m.member_id = n.member_id WHERE m.host_id=" . $uid . " ORDER by m.member_id";
 	$result = db_query($sql);
 	db_set_active();
 	$output = "";
+	$eigen = "";
 	if ($result->rowCount()) {
 		$count = $result->rowCount();
-  		foreach ($result as $row) {
-  				$output .= $level . '<span class="level' . $level . ' stufe' . $row->m_level . ' istaktiv" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id . ')</span><br>' . boucado_downline_tree($row->member_id,$level+1);
+		$statistik[] = array('level' => $level, 'count' => $count);
+		foreach ($result as $row) {
+			if ($sponsor_id == $row->sponsor_id) {$eigen = " eigen"; }
+  			$output .= $level . '<span class="level' . $level . ' stufe' . $row->bonuslevel . $eigen . '" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id .  ') ' . $row->first_name . '</span><br>' . boucado_downline_tree($statistik, $row->member_id, $sponsor_id, $level+1);
   		}
  		db_set_active();
 		return $output;
@@ -712,14 +786,15 @@ function boucado_downline_tree($uid,$level=1) {
 		return "";
 	}
 }
-
+ 
 
 function boucado_resettests() {
 	db_set_active('boucado_matrix');	
 	$result = db_query("DELETE FROM {test_members} WHERE member_id > 1");
 	$result = db_query("DELETE FROM {test_matrix} WHERE member_id > 1");	
 	db_set_active();
-	$output = boucado_downline_tree(1,1);
+	$statistik = array();
+	$output = boucado_downline_tree($statistik,1,1,1);
 	return "<p>Testdaten gelöscht.</p>" . $output;
 }
 
@@ -735,10 +810,10 @@ function new_TestMember($sponsor_id) {
 	// Insert in table
 	try {
 		$member_id = db_insert('test_members')
-			->fields(array('sponsor_id','m_level','username','first_name','last_name'))
+			->fields(array('sponsor_id','bonuslevel','username','first_name','last_name'))
 			->values(array(
 				'sponsor_id' => $sponsor_id,
-				'm_level' => 2,
+				'bonuslevel' => 2,
 				'username' => $username,
 				'first_name' => $vorname[0],
 				'last_name' => $nachname[0],
@@ -759,36 +834,21 @@ function new_TestMember($sponsor_id) {
 			db_set_active('boucado_matrix');
 			$result = db_query("SELECT member_id FROM {test_members} ORDER BY rand() LIMIT 1;");
 			$sponsor = $result->fetchCol();
-			$sponsor_id = $sponsor[0];
+			$next_id = $sponsor[0];
 			db_set_active();
-		} 	
-		$member_id = new_TestMember($sponsor_id);
-		boucado_inMatrix($member_id, $sponsor_id);
+		} else {
+			$next_id = $sponsor_id;
+		}
+		$member_id = new_TestMember($next_id);
+		boucado_inMatrix($member_id, $next_id);
 	}
-	$output = boucado_downline_tree(1,1);
+	$statistik = array();
+	$output = boucado_downline_tree($statistik,1,1,1);
 	
 	return $output;
 }
 
 function boucado_inMatrix($member_id, $sponsor_id) {
-
-/*
-	db_set_active('boucado_matrix');
-	
-	// zuerst nach der richtigen Reihe von oben suchen
-	$result = db_query("SELECT count(*) FROM {test_members} WHERE sponsor_id = " . $sponsor_id);
-	$sponsors = $result->fetchCol();
-	$sponsored = $sponsors[0];
-	if ($sponsored > 3) { // erste Reihe voll, sonst die übergebene $sponsor_id nehmen und mal auffüllen
-		$nextline = $sponsored % 3;
-	
-		$result = db_query("SELECT member_id FROM {test_matrix} WHERE host_id = '" . $sponsor_id . "'ORDER BY member_id LIMIT " . $nextline . ",1");
-		$lines = $result->fetchCol();
-		if ($lines) {$sponsor_id = $lines[0];}
-	}	
-
-	db_set_active();
-*/
 
 	$nextone = array();
 	$nextLevelIds = getNextLevelIds($nextone, $sponsor_id);
@@ -919,8 +979,8 @@ function update_upline($member_id, $level = 1) {
 		db_set_active();
 		update_upline($host_id, $level++);		
 	}
-		
 }
+
 function compareCount($a, $b)
 {
   return $a['count'] - $b['count'];
@@ -948,3 +1008,101 @@ function print_pre($p,$titel="") {
 	print "</pre>";
 }
 
+function boucado_payment_success($processor){
+	// print_r($_GET);
+	// Array ( [tx] => 3PS37413TX528213Y [st] => Completed [amt] => 15.00 [cc] => EUR [cm] => [item_number] => admin [q] => payment/success/PayPal ) 
+	// http://boucado.space/payment/success/PayPal?tx=5X6538147B004380C&st=Completed&amt=15.00&cc=EUR&cm=&item_number=admin
+	// Danke für Ihre Zahlung. Ihre Transaktion wurde abgeschlossen und Sie erhalten per E-Mail eine Bestätigung für Ihren Kauf. Sie können sich unter <a href='http://www.paypal.com' target='_blank'>www.paypal.com</a> in Ihr Konto einloggen, um die Transaktionsdetails anzuzeigen.
+	switch (strtolower($processor)) {
+		case 'paypal':
+			$danke = t("Your payment with PayPal was successful. The transaction was completed and you will receive an email with the confirmation about your payment. You can login at <a href='http://www.paypal.com' target='_blank'>www.paypal.com</a> and control the transaction details.");
+			$danke .= "<br>";
+			$danke .= "<p><b>PayPal Transaction ID: " . $_GET['tx'] . "</b></p>";
+			break;
+		
+		default:
+			
+			break;
+	}
+	
+	db_set_active('boucado_matrix');
+
+	// Insert in table
+	try {
+		$payment_id = db_insert('test_payments')
+			->fields(array('username','transaction','status','amount','currency','bonuslevel'))
+			->values(array(
+				'username' => $_GET['item_number'],
+				'transaction' => $_GET['tx'],
+				'status' => $_GET['st'],
+				'amount' => $_GET['amt'],
+				'currency' => $_GET['cc'],
+				'bonuslevel' => 2))
+			->execute();
+		db_set_active();
+		boucado_pay_uplines($payment_id, $_GET['item_number'], $_GET['amt'],2);
+		return $danke;
+	} catch (PDOException $e) {
+		dpm($e->getMessage());
+		db_set_active();
+		return "Fehler beim Speichern.";
+	}
+}
+
+function boucado_payment_cancel(){
+	$cancel = t("<h2>You canceled the payment.</h2>");
+	return $cancel;
+}
+
+function boucado_pay_uplines($payment_id, $username, $amount, $bonuslevel) {
+	$payer = boucado_get_userdata($username);
+	// if ($bonuslevel != $payer['bonuslevel']) {}
+
+	pay_upline($payer->member_id, $payment_id, 1); 
+}
+
+// Upline rekursiv bis zur 9. Ebene aktualisieren
+function pay_upline($member_id, $payment_id, $level = 1) {
+	if (($member_id == "0") || ($level > 9)) {
+		return; 
+	} else {
+		db_set_active('boucado_matrix');
+		$result = db_query("SELECT host_id, bonuslevel FROM test_matrix m, test_members n WHERE m.member_id = n.member_id AND n.member_id = " . $member_id);
+		$row = $result->fetchAssoc();
+		dpm($row);
+		$host_id = $row['host_id'];	
+		$bonuslevel = $row['bonuslevel'];
+		db_set_active();
+		$upline = boucado_get_userdata($host_id);
+		//dpm($upline);
+//		db_set_active('boucado_matrix');
+//		$sql = "SELECT fee_member FROM fees WHERE from_order_index=" . $bonuslevel . " AND to_order_index=" . $upline->bonuslevel;
+//		dpm($sql);
+/*		$fees = db_query($sql);
+		$fee = $fees->fetchCol();
+		$thefee = $fee[0];
+/*		// Insert in table
+		try {		
+			db_insert('test_wallet')
+			->fields(array('amount','from_id','to_id','type_cash','descr','payment_id'))
+			->values(array(
+			'amount' => $thefee,
+			'from_id' => $member_id,
+			'to_id' => $upline['member_id'],
+			'type_cash' => 'Bonus',
+			'descr' => 'monthly Payment from Downline',
+			'payment_id' => $payment_id
+			))
+			->execute();
+			db_set_active();
+			pay_upline($host_id, $payment_id, $level++);
+		} catch (PDOException $e) {
+			dpm($e->getMessage());
+			db_set_active();
+		}		
+
+ 		db_set_active();
+ 		pay_upline($host_id, $payment_id, $level++);
+  
+ */	}
+}
