@@ -152,8 +152,37 @@ function boucado_menu() {
     'access arguments' => array('access content'),
   );
   
+  $items['payment/manually'] = array(
+    'title' => t('BOUCADO manually payment'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('boucado_payment_manually_form'),
+      'access callback' => TRUE,
+      'access arguments' => array('access all boucado'),
+      'type' => MENU_CALLBACK,      
+  );  
   
+  $items['payment/payall'] = array(
+    'title' => t('BOUCADO pay all'),
+    'description' => t('BOUCADO pay all'),
+    'page callback' => 'boucado_test_pay_all',
+    'access arguments' => array('administer site configuration'),
+  );
  
+   $items['payment/payall/clear'] = array(
+    'title' => t('BOUCADO Clear Payments'),
+    'description' => t('BOUCADO Clear Payments'),
+    'page callback' => 'boucado_test_pay_all_clear',
+    'access arguments' => array('administer site configuration'),
+  );
+  
+     // path with autocomplete function for cities
+  $items['username/autocomplete'] = array(
+      'title' => 'Autocomplete for usernames',
+      'page callback' => '_usernames_autocomplete',
+      'access arguments' => array('access all boucado'),  //or whatever permission makes sense
+      'type' => MENU_CALLBACK
+    );
+	
     $items['boucado/testform'] = array(
         'title' => t('BOUCADO Testform'),
       'page callback' => 'drupal_get_form',
@@ -282,7 +311,8 @@ global $user;
 		$thisuser->upline = 'admin';
 		$thisuser->upline_id = '1';
 		$thisuser->upline_first_name = 'BOUCADO';
-		$thisuser->upline_last_name = 'Admin';		
+		$thisuser->upline_last_name = 'Admin';	
+		$thisuser->bonuslevel = 1;	
 		
 		return $thisuser;
 	}
@@ -321,12 +351,14 @@ global $user;
 	$thisuser->sponsor_id = $sponsor->member_id;
 	$thisuser->sponsor_first_name = $sponsor->first_name;
 	$thisuser->sponsor_last_name = $sponsor->last_name;
+	$thisuser->sponsor_bonuslevel = $sponsor->bonuslevel;
 	
 	} else { // der Admin
 		$thisuser->sponsor = 'admin';
 		$thisuser->sponsor_id = '1';
 		$thisuser->sponsor_first_name = 'BOUCADO';
 		$thisuser->sponsor_last_name = 'Admin';
+		$thisuser->sponsor_bonuslevel = 5;
 	}
 
  // Upline holen
@@ -361,11 +393,13 @@ global $user;
 			$thisuser->upline_id = $upline->member_id;
 			$thisuser->upline_first_name = $upline->first_name;
 			$thisuser->upline_last_name = $upline->last_name;
+			$thisuser->upline_bonuslevel = $upline->bonuslevel;
 		} else { // noch nicht platzert
 			$thisuser->upline = '';
 			$thisuser->upline_id = -1;
 			$thisuser->upline_first_name = '';
-			$thisuser->upline_last_name = '';			
+			$thisuser->upline_last_name = '';
+			$thisuser->upline_bonuslevel = 0;			
 		}
 		db_set_active();	
 	} else { // der Admin
@@ -373,6 +407,7 @@ global $user;
 		$thisuser->upline_id = '1';
 		$thisuser->upline_first_name = 'BOUCADO';
 		$thisuser->upline_last_name = 'Admin';
+		$thisuser->upline_bonuslevel = 5;
 	}
 	
 
@@ -968,6 +1003,7 @@ function getNextLevelIds(&$nextone, $sponsor_id) {
 
 // Upline rekursiv bis zur 9. Ebene aktualisieren
 function update_upline($member_id, $level = 1) {
+	
 	if (($member_id == "0") || ($level > 9)) {
 		return; 
 	} else {
@@ -1011,6 +1047,97 @@ function print_pre($p,$titel="") {
 	print "</pre>";
 }
 
+
+function boucado_payment_manually_form($form, &$form_state) {
+		
+	$form = array();
+	
+	$form['username'] = array(
+          '#type' => 'textfield',
+          '#title' => t('username'),
+          '#size' => 30,
+          '#maxlength' => 60,
+          '#autocomplete_path' => 'user/autocomplete',
+          '#weight' => -1,
+        );
+            
+	//Query DB for Rows
+	db_set_active('boucado_matrix');
+    $query = db_select('bonuslevels','b');
+    $query->fields('b', array('title', 'cost',));
+    $query->orderBy('order_index', 'ASC');
+    $results = $query->execute();
+
+	//define rows
+	$options = array();
+	foreach ($results as $result) {
+	    $options[$result->cost] = $result->title;
+	}
+	db_set_active();
+	
+    $form['bonuslevel'] = array(
+        '#type' => 'select',
+        '#title' => t('Bonuslevel'),
+        '#options' => $options,
+        '#bonuslevel' => array(
+            'visible' => array(
+                ':input[name="data_set"]' => array('value' => 'education'),
+            ),
+        ),
+    );
+	         
+	$form['transaction'] = array(
+          '#type' => 'textfield',
+          '#title' => t('Transaction ID'),
+          '#size' => 30,
+          '#maxlength' => 60,
+          '#default_value' => 'manually',	
+	);
+    $form['submit'] = array(
+          '#type' => 'submit',
+          '#value' => t('Submit'),
+        );
+   
+   $form['submit']['#validate'][] = 'boucado_payment_manually_form_validate';
+   $form['#submit'][] = 'boucado_payment_manually_form_submit';
+
+   return $form;
+}
+
+function boucado_payment_manually_form_validate($form, &$form_state) {
+  $name = $form_state['values']['username'];
+  if (!db_query("SELECT COUNT(*) FROM {users} WHERE name = :name;", array(':name' => $name))->fetchField()) {
+        form_set_error('username', "User '" . $name . "' does not exist.");
+   }
+}
+
+function boucado_payment_manually_form_submit($form, &$form_state) {
+	$message = $form_state['values']['bonuslevel'] . " for user '" . $form_state['values']['username'] . "' paid.";
+	boucado_payment_pay($form_state['values']['username'],$form_state['values']['transaction'],"Manually",$form_state['values']['bonuslevel'],$message);
+}
+
+
+/**
+ * autocomplete helper
+ * $string = string for search
+ */
+function _usernames_autocomplete($string) {
+  $matches = array();
+  $result = db_select('users', 'u')
+    ->fields('u', array('name'))
+    ->condition('name', '%' . db_like($string) . '%', 'LIKE')
+    ->execute();
+
+  // save the query to matches
+  foreach ($result as $row) {
+    $matches[$row->name] = check_plain($row->name);
+  }
+
+  // Return the result to the form in json
+  drupal_json_output($matches);
+}
+
+
 function boucado_payment_success($processor){
 	// print_r($_GET);
 	// Array ( [tx] => 3PS37413TX528213Y [st] => Completed [amt] => 15.00 [cc] => EUR [cm] => [item_number] => admin [q] => payment/success/PayPal ) 
@@ -1021,6 +1148,7 @@ function boucado_payment_success($processor){
 			$danke = t("Your payment with PayPal was successful. The transaction was completed and you will receive an email with the confirmation about your payment. You can login at <a href='http://www.paypal.com' target='_blank'>www.paypal.com</a> and control the transaction details.");
 			$danke .= "<br>";
 			$danke .= "<p><b>PayPal Transaction ID: " . $_GET['tx'] . "</b></p>";
+			boucado_payment_pay($_GET['item_number'],$_GET['tx'],$_GET['st'],$_GET['amt'],$danke);
 			break;
 		
 		default:
@@ -1028,32 +1156,40 @@ function boucado_payment_success($processor){
 			break;
 	}
 	
+	return $danke;
+}
+
+function boucado_payment_pay($username,$transaction,$status,$amount,$danke = '') {
 	db_set_active('boucado_matrix');
 
+	if ($transaction == 'manually') {
+		$transaction = time();
+	}
+	
 	// bonuslevel aktualisieren
-	$result = db_query("SELECT bid FROM bonuslevels WHERE cost = " . $_GET['amt']);
+	$result = db_query("SELECT bid FROM bonuslevels WHERE cost = " . $amount);
 	$row = $result->fetchAssoc();
+	$bonuslevel = $row['bid'];
 	
 	db_update('boucado_members')
-	->fields(array('bonuslevel' => $row['bid']))
-	->condition('username',$_GET['item_number'],'=')
+	->fields(array('bonuslevel' => $bonuslevel))
+	->condition('username',$username ,'=')
 	->execute();
 
 	// Insert in table
 	try {
 		$payment_id = db_insert('payments')
-			->fields(array('username','transaction','status','amount','currency','bonuslevel'))
+			->fields(array('username','transaction','status','amount','bonuslevel'))
 			->values(array(
-				'username' => $_GET['item_number'],
-				'transaction' => $_GET['tx'],
-				'status' => $_GET['st'],
-				'amount' => $_GET['amt'],
-				'currency' => $_GET['cc'],
-				'bonuslevel' => 2))
+				'username' => $username,
+				'transaction' => $transaction,
+				'status' => $status,
+				'amount' => $amount,
+				'bonuslevel' => $bonuslevel))
 			->execute();
 		db_set_active();
-		boucado_pay_uplines($payment_id, $_GET['item_number'], $_GET['amt'],2);
-		return $danke;
+		boucado_pay_uplines($payment_id, $transaction, $username, $bonuslevel);
+		drupal_set_message($danke);
 	} catch (PDOException $e) {
 		dpm($e->getMessage());
 		db_set_active();
@@ -1066,54 +1202,163 @@ function boucado_payment_cancel(){
 	return $cancel;
 }
 
-function boucado_pay_uplines($payment_id, $username, $amount, $bonuslevel) {
+function boucado_pay_uplines($payment_id, $transaction, $username, $bonuslevel) {
 	$payer = boucado_get_userdata($username);
-	// if ($bonuslevel != $payer['bonuslevel']) {}
-
-	pay_upline($payer->member_id, $payment_id, 1); 
+	pay_upline($payer->username, $payer->upline, $payment_id, $transaction, $bonuslevel, 1); 
 }
 
 // Upline rekursiv bis zur 9. Ebene aktualisieren
-function pay_upline($member_id, $payment_id, $level = 1) {
-	if (($member_id == "0") || ($level > 9)) {
-		return; 
-	} else {
+function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer_bonuslevel, $level) {
+	if ($upline_name == "admin") {
+		
+		// admin auszahlen:
+
+		// bonuslevel vergleichen und Betrag holen
 		db_set_active('boucado_matrix');
-		$result = db_query("SELECT host_id, bonuslevel FROM boucado_members  WHERE member_id = " . $member_id);
-		$row = $result->fetchAssoc();
-		$host_id = $row['host_id'];	
-		$bonuslevel = $row['bonuslevel'];
-		db_set_active();
-		$upline = boucado_get_userdata($host_id);
-		//dpm($upline);
-//		db_set_active('boucado_matrix');
-//		$sql = "SELECT fee_member FROM fees WHERE from_order_index=" . $bonuslevel . " AND to_order_index=" . $upline->bonuslevel;
-//		dpm($sql);
-/*		$fees = db_query($sql);
+		$sql = "SELECT amount FROM fees WHERE from_bonuslevel=" . $payer_bonuslevel . " AND to_bonuslevel=5";
+		$fees = db_query($sql);
 		$fee = $fees->fetchCol();
-		$thefee = $fee[0];
-/*		// Insert in table
+		$adminfee = (10 - $level) * $fee[0];
+		
+		$sql = "SELECT title FROM bonuslevels WHERE bid=" . $payer_bonuslevel;
+		$result = db_query($sql);
+		$bonus = $result->fetchCol();
+
+		// Insert in table
 		try {		
-			db_insert('test_wallet')
-			->fields(array('amount','from_id','to_id','type_cash','descr','payment_id'))
+			db_insert('wallet')
+			->fields(array('amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
 			->values(array(
-			'amount' => $thefee,
-			'from_id' => $member_id,
-			'to_id' => $upline['member_id'],
-			'type_cash' => 'Bonus',
+			'amount' => $adminfee,
+			'from_id' => $payer_name,
+			'to_id' => $upline_name,
+			'type_cash' => $bonus[0] .'-Bonus',
 			'descr' => 'monthly Payment from Downline',
-			'payment_id' => $payment_id
+			'payment_id' => $payment_id,
+			'transaction' => $transaction,
+		 	'level' => $level
 			))
 			->execute();
 			db_set_active();
-			pay_upline($host_id, $payment_id, $level++);
 		} catch (PDOException $e) {
 			dpm($e->getMessage());
 			db_set_active();
-		}		
+		}
 
- 		db_set_active();
- 		pay_upline($host_id, $payment_id, $level++);
-  
- */	}
+		 db_set_active();		
+		drupal_set_message($bonus[0] . ": " . $payer_name . "->admin" . ": (" . $adminfee . ".00)");
+		return;		
+	} 
+	else if ($level > 9) {
+		return; 
+	} else {
+		$receiver = boucado_get_userdata($upline_name);
+		$receiver_bonuslevel = $receiver->bonuslevel;
+		$next_upline = boucado_get_userdata($receiver->upline);
+
+		// bonuslevel vergleichen und Betrag holen
+		db_set_active('boucado_matrix');
+		$sql = "SELECT amount FROM fees WHERE from_bonuslevel=" . $payer_bonuslevel . " AND to_bonuslevel=" . $receiver_bonuslevel;
+		$fees = db_query($sql);
+		$fee = $fees->fetchCol();
+		
+		$sql = "SELECT title FROM bonuslevels WHERE bid=" . $payer_bonuslevel;
+		$result = db_query($sql);
+		$bonus = $result->fetchCol();
+		
+		$nextlevel = $level + 1;
+				 
+		// Insert in table
+		try {		
+			db_insert('wallet')
+			->fields(array('amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
+			->values(array(
+			'amount' => $fee[0],
+			'from_id' => $payer_name,
+			'to_id' => $upline_name,
+			'type_cash' => $bonus[0] .'-Bonus',
+			'descr' => 'monthly Payment from Downline',
+			'payment_id' => $payment_id,
+			'transaction' => $transaction,
+		 	'level' => $level
+			))
+			->execute();
+			db_set_active();
+		 drupal_set_message($bonus[0] . ": " . $payer_name . "->" . $upline_name . ": (" . $fee[0] . ")");
+		} catch (PDOException $e) {
+			dpm($e->getMessage());
+			db_set_active();
+		}
+
+		// bonusdifferenz
+		db_set_active('boucado_matrix');
+		$sql = "SELECT amount FROM fees WHERE from_bonuslevel=" . $payer_bonuslevel . " AND to_bonuslevel=" . $payer_bonuslevel;		
+		$result = db_query($sql)->fetchCol();
+		$payer_bonus = $result[0];
+		
+		$sql = "SELECT amount FROM fees WHERE from_bonuslevel=" . $payer_bonuslevel . " AND to_bonuslevel=" . $receiver_bonuslevel;
+		$result = db_query($sql)->fetchCol();
+		$receiver_bonus = $result[0];
+		
+		$bonusdifference = $payer_bonus - $receiver_bonus;
+		
+		if ($bonusdifference > 0) { // der admin bekommt den Rest
+			try {		
+				db_insert('wallet')
+				->fields(array('amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
+				->values(array(
+				'amount' => $bonusdifference,
+				'from_id' => $payer_name,
+				'to_id' => 'admin',
+				'type_cash' => 'ADMIN-Bonus',
+				'descr' => 'REST Bonus from Downline',
+				'payment_id' => $payment_id,
+				'transaction' => $transaction,
+			 	'level' => $level
+				))
+				->execute();
+				db_set_active();
+		 		drupal_set_message("ADMIN-Bonus: " . $payer_name . "->" . $upline_name . ": (" . $bonusdifference . ".00)");				
+			} catch (PDOException $e) {
+				dpm($e->getMessage());
+				db_set_active();
+			}			
+		}
+		
+
+		 db_set_active();
+		pay_upline($payer_name, $next_upline->username, $payment_id, $transaction, $payer_bonuslevel, $nextlevel);
+ 	}
 }
+
+function boucado_test_pay_all() {
+	boucado_test_pay_all_clear();
+// Member holen
+	db_set_active('boucado_matrix');
+	$query = db_select('boucado_members', 'm');
+	$query->fields('m');
+	$query->condition('member_id','1','>');
+	$result = $query->execute();
+	db_set_active();
+
+	foreach ($result as $record) {
+
+		db_set_active('boucado_matrix');
+		$sql = "SELECT cost FROM bonuslevels WHERE bid=" . $record->bonuslevel;
+		$result = db_query($sql);
+		$bonus = $result->fetchCol();
+
+		boucado_payment_pay($record->username,'manually','Manually',$bonus[0]);
+	}
+	
+
+	return "Alle haben bezahlt.";	
+}
+
+function boucado_test_pay_all_clear() {
+	db_set_active('boucado_matrix');
+	$num_deleted = db_delete('payments')->execute();
+	$num_deleted = db_delete('wallet')->execute();
+	db_set_active();
+}
+	
