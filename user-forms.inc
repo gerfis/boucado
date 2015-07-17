@@ -133,7 +133,7 @@ Andererseits wird dieser Name verwendet, wenn Sie weitere Personen als Mitgliede
 	$form['personal']['strTitel_O'] = array(
 	  '#type' => 'textfield',
 	  '#title' => t('Title'),
-	  '#required' => TRUE,
+	  '#required' => FALSE,
 	  '#default_value' => $userdata->titel,	  
 	  '#weight' => 2,	 
 	);		
@@ -304,23 +304,32 @@ function boucado_user_register_form_submit($form, &$form_state) {
 	$sponsor = boucado_get_userdata($form_state['values']['sponsor']);
 	$email = $form_state['values']['mail'];
 
+	$fetch_uid_arr = db_select('users', 'u')
+                ->fields('u', array('uid'))
+                ->condition('name', $username, '=')
+                ->execute()
+                ->fetchAssoc();
+
+        $uid = $fetch_uid_arr['uid'];
+
 	db_set_active('boucado_matrix');
-	$newuser = db_query("SELECT * FROM {members} WHERE username='" . $username . "'");
+	$newuser = db_query("SELECT * FROM {boucado_members} WHERE username='" . $username . "'"); // nur weil die function 2x aufgerufen wird.
 	if (!$newuser->rowCount()) {
 
-    	$success = db_query("INSERT INTO {members} (username,enroller_id,email,reg_date,m_level,is_active,is_dead) 
-		VALUES ('" . $username . "','" . $sponsor->member_id . "','" .	$email . "'," . time() . ",0,0,0)");
-		if (!$success) {
-			drupal_set_message("Der Benutzer wurde NICHT gespeichert.", 'error');
-		}
-		else {
-			drupal_set_message("Der Benutzer wurde gespeichert.");
-		}
+		db_insert('boucado_members')
+            ->fields(array(
+              'member_id' => $uid,
+              'username' => $username,
+              'sponsor_id' => $sponsor->member_id,
+              'email' => $email,                         
+            ))
+            ->execute();
+		db_set_active();			
+		drupal_set_message("Der Benutzer wurde gespeichert.");
+	} else {
+		db_set_active();
 	}
 	
-	db_set_active();
-	
-
 /*
 	// E-Mail an Upline senden
 	$level = 1;
@@ -369,7 +378,7 @@ function boucado_user_edit_form_submit($form, &$form_state) {
 	$account_id = $form_state['values']['account_id'];
 
 	db_set_active('boucado_matrix');
-	$sql = "UPDATE {members} SET 
+	$sql = "UPDATE {boucado_members} SET 
 	email='" . $strEmail_O . 
 	"',titel='" . $strTitel_O .	
 	"',last_name='" . $strNName_O . 

@@ -23,6 +23,21 @@ print_r($query->arguments());
 	drupal_add_js(array('boucado' => $boucado_settings), 'setting');	
 */
 
+
+function boucado_init() {
+	
+    drupal_add_css(drupal_get_path('module', 'boucado') . '/boucado.css');
+}
+
+
+function fdate($datetimestring = '1970-01-01 00:00:00', $format = 'U') {
+  // Create a datetime object, return it formatted
+  // If you want to give credit for this somewhere, thanks.
+  // You really don't have to though; this is kinda obvious
+  $dt = new DateTime($datetimestring);
+  return $dt->format($format);
+} 
+
 function boucado_permission() {
   return array(
     'access own boucado' => array(
@@ -62,7 +77,7 @@ function boucado_menu() {
   $items['boucado/downline/%'] = array(
     'title' => 'My Downline',
     'description' => 'My BOUCADO downline',
-    'page callback' => 'boucado_downline',
+    'page callback' => 'boucado_mydownline',
     'page arguments' => array(2),
     'access arguments' => array('access all boucado'),
   );
@@ -70,11 +85,27 @@ function boucado_menu() {
   $items['boucado/downline'] = array(
     'title' => 'My Downline',
     'description' => 'My BOUCADO downline',
-    'page callback' => 'boucado_downline',
+    'page callback' => 'boucado_mydownline',
     'page arguments' => array(2),    
     'access arguments' => array('access own boucado'),
   );
       	
+  $items['boucado/matrix/%'] = array(
+    'title' => 'My Matris',
+    'description' => 'My BOUCADO matrix',
+    'page callback' => 'boucado_mymatrix',
+    'page arguments' => array(2),
+    'access arguments' => array('access all boucado'),
+  );
+  
+  $items['boucado/matrix'] = array(
+    'title' => 'My Matrix',
+    'description' => 'My BOUCADO matrix',
+    'page callback' => 'boucado_mymatrix',
+    'page arguments' => array(2),    
+    'access arguments' => array('access own boucado'),
+  );
+  		
   $items['boucado/position/%/%'] = array(
     'title' => 'New Position',
     'description' => 'Next free position',
@@ -197,10 +228,22 @@ function boucado_check_sponsor($uid) {
 	}
 }
 
+function boucado_user_presave(&$edit, $account, $category) {
+	// Benutzer bei der Aktivierung in die Matrix platzieren:
+	
+  if ($account->uid // user is not new
+      && $account->status === "0" && $edit['status']==1) { // user is being activated
+    
+    $member = boucado_get_userdata($account->name);
+	boucado_inMatrix($member->member_id, $member->sponsor_id);
+	drupal_set_message("Der Benutzer wurde in der Matrix platziert.");
+  }
+}
+
 function boucado_get_username($member_id) {
 // Member holen
 	db_set_active('boucado_matrix');
-	$query = db_select('members', 'm');
+	$query = db_select('boucado_members', 'm');
 	$query
 		->fields('m')
   		->condition('m.member_id', $member_id, '=')
@@ -246,7 +289,7 @@ global $user;
 
 // Member holen
 	db_set_active('boucado_matrix');
-	$query = db_select('members', 'm');
+	$query = db_select('boucado_members', 'm');
 	$query
 		->fields('m')
   		->condition('m.username', $username, '=')
@@ -259,12 +302,12 @@ global $user;
 	}
 
  // Sponsor holen:
- 	if ($thisuser->member_id > 1) {
+ 	if (isset($thisuser) && ($thisuser->member_id > 1)) {
  	db_set_active('boucado_matrix');
- 	$query = db_select('members', 'm');
+ 	$query = db_select('boucado_members', 'm');
 	$query
 		->fields('m')
-  		->condition('m.member_id', $thisuser->enroller_id, '=')
+  		->condition('m.member_id', $thisuser->sponsor_id, '=')
   		->range(0, 1);
 	$result = $query->execute();
 
@@ -285,15 +328,16 @@ global $user;
 		$thisuser->sponsor_first_name = 'BOUCADO';
 		$thisuser->sponsor_last_name = 'Admin';
 	}
-	
+
  // Upline holen
  
   	if ($thisuser->member_id > 1) { // nicht der Admin
 	 	db_set_active('boucado_matrix');
-	 	$query = db_select('matrix', 'm');
+	 	$query = db_select('boucado_members', 'm');
 		$query
 			->fields('m')
 	  		->condition('m.member_id', $thisuser->member_id, '=')
+			->condition('m.host_id','0','>')
 	  		->range(0, 1);
 		$result = $query->execute();
 
@@ -302,7 +346,7 @@ global $user;
 		  		$upline_id = $record;
 			}
 		
-		 	$query = db_select('members', 'm');
+		 	$query = db_select('boucado_members', 'm');
 			$query
 				->fields('m')
 		  		->condition('m.member_id', $upline_id->host_id, '=')
@@ -335,51 +379,18 @@ global $user;
 	return $thisuser;
 }
 
-
-function boucado_sync_users(){
-	
-	// Zuerst alle Drupal user nach boucado_matrix kopieren:
-	$sql = "SELECT uid, name FROM {users} WHERE uid>0";
-
-	$result = db_query($sql)->fetchAll();
-	
-	$output = "";
+function boucado_user_delete($account) {
+	// Benutzer aus boucado matrix löschen
 	db_set_active('boucado_matrix');
-	db_truncate('drupal_users')->execute();
-	
-	  foreach ($result as $row) { 
-		$sql = "INSERT INTO drupal_users (uid,name) VALUES('" . $row->uid . "','" . $row->name . "')";
-		$ok = db_query($sql);
 
-	  }  
-
-	// Dann alle neuen Members suchen und ev. neu in Drupal anlegen:
-	$sql = "SELECT username, email from members WHERE username NOT IN (SELECT name from drupal_users)";
-	$result = db_query($sql)->fetchAll();
-
-	if (!$result) {$output = "<h2>Keine neuen User angemeldet.</h2><p>&nbsp;</p>"; }
+	$num_deleted = db_delete('boucado_members')
+		->condition('username', $account->name)
+		->execute();
 
 	db_set_active();	
 	
-	  foreach ($result as $row) { 
-		//set up the user fields
-		$fields = array(
-		  'name' => $row->username,
-		  'mail' => $row->email,
-		  'pass' => $row->username,
-		  'status' => 1,
-		  'init' => $row->email,
-		  'roles' => array(
-		    DRUPAL_AUTHENTICATED_RID => 'authenticated user',
-		  ),
-		);
-		 
-		//the first parameter is left blank so a new user is created
-		$account = user_save('', $fields);
-		$output .= $account->uid . " -> " . $account->name . "</br>";		 
-	  }  	
-	
-	return $output;
+	drupal_set_message("Der Benutzer wurde aus der BOUCADO Matrix gelöscht.");
+
 }
 
 
@@ -402,6 +413,69 @@ function boucado_mail($key, &$message, $params) {
       $message['body'] = $body;
       break;	    
   }    
+}
+
+
+
+function boucado_sendmail() {
+
+	$uid = $user->uid;
+	$userdata = boucado_get_userdata($uid);
+			
+	// E-Mail senden:
+	
+	$params = array(
+  		'Vorname' => $userdata['strVName_O'],
+  		'Polizze' => $polizze
+	);
+	
+	$to = $userdata['strEmail_O'] . ',office@boucado.space';
+	
+	$sent = drupal_mail('boucado', 'kuendigen', $to , language_default(), $params, 'office@boucado.space');
+	
+	if($sent){
+		drupal_set_message('Ein E-Mail wurde zu Ihnen gesendet.', 'status');	
+	} else {
+		drupal_set_message('E-Mail konnte nicht gesendet werden.', 'error');
+	}
+	
+}
+
+function boucado_userinfo($uid) {
+global $user;
+	
+	if($uid!='0') {
+		$userdata = boucado_get_userdata($uid);
+	} else {
+		$uid = $user->uid;
+		$userdata = boucado_get_userdata($uid);
+	}
+	
+	$output = "Username: " . $userdata->user . "<br>";
+	$output .= "Handicap: " . $userdata->hcp . "<br>";
+
+
+	$output .= "<hr><br><h3>Letzte Runden:</h3>";
+	$output .= "<div id='user_rounds'>";
+
+	db_set_active('boucado_matrix');
+	
+$query = db_select('rounds')->extend('PagerDefault'); 
+ $query->fields('rounds', array('id', 'course', 'date', 'score', 'hcpdiff'));    
+ $query->condition('uid', $uid, '=');
+ $query->orderBy('id', 'DESC');
+ $result = $query ->limit(10)->execute()->fetchAll();
+db_set_active();
+ $output .= "<table id='tbl_rounds'><tr><th>Course</th><th>Date</th><th>Score</th><th>HCP Diff</th></tr>";
+ foreach ($result as $row) {
+	$output .= "<tr><td>" . $row->course . "</td><td>" . $row->date . "</td><td>" . $row->score . "</td><td>" . $row->hcpdiff . "</td></tr>";
+ }
+ $output .= "</table><br>"; 
+
+$output .= theme('pager', array('tags' => array()));
+$output .= "</div> <!-- user_rounds -->";
+return $output; 
+
 }
 
 
@@ -461,116 +535,6 @@ function boucado_mynetworks($net_id, $membername) {
 	
 }
 
-function boucado_init() {
-	
-    drupal_add_css(drupal_get_path('module', 'boucado') . '/boucado.css');
-}
-
-
-function fdate($datetimestring = '1970-01-01 00:00:00', $format = 'U') {
-  // Create a datetime object, return it formatted
-  // If you want to give credit for this somewhere, thanks.
-  // You really don't have to though; this is kinda obvious
-  $dt = new DateTime($datetimestring);
-  return $dt->format($format);
-} 
-
-function boucado_user_delete($account) {
-	// Benutzer aus boucado matrix löschen
-	db_set_active('boucado_matrix');
-
-	$num_deleted = db_delete('members')
-		->condition('username', $account->name)
-		->execute();
-
-	db_set_active();	
-	
-	drupal_set_message("Der Benutzer wurde aus der BOUCADO Matrix gelöscht.");
-
-}
-
-function boucado_sendmail() {
-
-	$uid = $user->uid;
-	$userdata = boucado_get_userdata($uid);
-			
-	// E-Mail senden:
-	
-	$params = array(
-  		'Vorname' => $userdata['strVName_O'],
-  		'Polizze' => $polizze
-	);
-	
-	$to = $userdata['strEmail_O'] . ',office@boucado.space';
-	
-	$sent = drupal_mail('boucado', 'kuendigen', $to , language_default(), $params, 'office@boucado.space');
-	
-	if($sent){
-		drupal_set_message('Ein E-Mail wurde zu Ihnen gesendet.', 'status');	
-	} else {
-		drupal_set_message('E-Mail konnte nicht gesendet werden.', 'error');
-	}
-	
-}
-
-function boucado_courses(){
-	$output = "";
-	db_set_active('boucado');
-	
-		
-	$query = db_select('courses', 'c');
-	$query
-  		->fields('c', array('course', 'realname', 'par', 'CR_middle', 'slope_middle', 'URL', 'premium'))
-  		->orderBy('c.course', 'ASC');
-	$result = $query->execute();
-	db_set_active();
-		
-	$output .= "<table id='tbl_courses'><tr><th>" . t('Course') . "</th><th>" . t('Real Name') . "</th><th>Par</th><th>CR</th><th>Slope</th><th>Premium</th></tr>";
-	foreach ($result as $row) {
-		if ($row->premium) {$premium = "*";} else {$premium = "";}
-		$output .= "<tr><td>" . $row->course . "</td><td><a target='_blank' href='" . $row->URL . "'>" . $row->realname . "</a></td><td>" . $row->par. "</td><td>" . $row->CR_middle . "</td><td>" . $row->slope_middle . "</td><td>" . $premium . "</td></tr>";
-	}
-	$output .= "</table>";
-	
-	return $output;
-}
-
-function boucado_userinfo($uid) {
-global $user;
-	
-	if($uid!='0') {
-		$userdata = boucado_get_userdata($uid);
-	} else {
-		$uid = $user->uid;
-		$userdata = boucado_get_userdata($uid);
-	}
-	
-	$output = "Username: " . $userdata->user . "<br>";
-	$output .= "Handicap: " . $userdata->hcp . "<br>";
-
-
-	$output .= "<hr><br><h3>Letzte Runden:</h3>";
-	$output .= "<div id='user_rounds'>";
-
-	db_set_active('boucado_matrix');
-	
-$query = db_select('rounds')->extend('PagerDefault'); 
- $query->fields('rounds', array('id', 'course', 'date', 'score', 'hcpdiff'));    
- $query->condition('uid', $uid, '=');
- $query->orderBy('id', 'DESC');
- $result = $query ->limit(10)->execute()->fetchAll();
-db_set_active();
- $output .= "<table id='tbl_rounds'><tr><th>Course</th><th>Date</th><th>Score</th><th>HCP Diff</th></tr>";
- foreach ($result as $row) {
-	$output .= "<tr><td>" . $row->course . "</td><td>" . $row->date . "</td><td>" . $row->score . "</td><td>" . $row->hcpdiff . "</td></tr>";
- }
- $output .= "</table><br>"; 
-
-$output .= theme('pager', array('tags' => array()));
-$output .= "</div> <!-- user_rounds -->";
-return $output; 
-
-}
 
 function boucado_network_form($form, &$form_state, $infos) {
 		
@@ -728,7 +692,7 @@ function boucado_test_form_form($form, &$form_state, $no_js_use = FALSE) {
         exit();
     }
 	
-function boucado_downline($uid) {
+function boucado_mydownline($uid) {
 global $user;
 
 	if($uid!='') {
@@ -741,7 +705,7 @@ global $user;
 	$statistik = array();
 	$output = "";
 	
-	$tree = boucado_downline_tree($statistik, $userdata->member_id, $userdata->member_id,1);
+	$tree = boucado_downline_tree($statistik, $userdata->member_id, $userdata->member_id,1,false);
 	
 	$levels = array('1' => 0, '2' => 0, '3' => 0, '4' => 0, '5' => 0, '6' => 0, '7' => 0, '8' => 0, '9' => 0);
 	$gesamt = 0;
@@ -762,12 +726,50 @@ global $user;
 	return $output;
 }
 
+function boucado_mymatrix($uid) {
+global $user;
 
-function boucado_downline_tree(&$statistik, $uid, $sponsor_id, $level=1) {
+	if($uid!='') {
+		$userdata = boucado_get_userdata($uid);
+	} else {
+		$uid = $user->name;
+		$userdata = boucado_get_userdata($uid);
+	}	
+	
+	$statistik = array();
+	$output = "";
+	
+	$tree = boucado_downline_tree($statistik, $userdata->member_id, $userdata->member_id,1,true);
+	
+	$levels = array('1' => 0, '2' => 0, '3' => 0, '4' => 0, '5' => 0, '6' => 0, '7' => 0, '8' => 0, '9' => 0);
+	$gesamt = 0;
+	
+	foreach ($statistik as $level) {
+		$levels[$level['level']] = $levels[$level['level']] + $level['count'];  
+		$gesamt += $level['count']; 
+	}
+	
+	for ($i = 1; $i < 10; $i++) {
+		$output .= "Level " . $i . ": " . $levels[$i] . "<br>";
+	}
+	$output .= "<p><b>Gesamt: " . $gesamt . "</b></p>";
+	$output .= "<br><hr><br>";
+	
+	$output .= $tree;
+	
+	return $output;
+}
+
+function boucado_downline_tree(&$statistik, $uid, $sponsor_id, $level=1, $matrix=true) {
 	if ($level>9) {return;} // Abbruch nach 9 Leveln
 	
 	db_set_active('boucado_matrix');
-	$sql = "SELECT m.member_id, n.bonuslevel, n.username, n.first_name, n.last_name, n.sponsor_id FROM {test_matrix} m JOIN {test_members} n ON m.member_id = n.member_id WHERE m.host_id=" . $uid . " ORDER by m.member_id";
+
+	if ($matrix) { // 3x9 Matrix oder richtige Downline anzeigen?
+		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id FROM {boucado_members} WHERE host_id=" . $uid . " ORDER by member_id";
+	} else {
+		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id FROM {boucado_members} WHERE sponsor_id=" . $uid . " ORDER by member_id";		
+	}
 	$result = db_query($sql);
 	db_set_active();
 	$output = "";
@@ -777,7 +779,7 @@ function boucado_downline_tree(&$statistik, $uid, $sponsor_id, $level=1) {
 		$statistik[] = array('level' => $level, 'count' => $count);
 		foreach ($result as $row) {
 			if ($sponsor_id == $row->sponsor_id) {$eigen = " eigen"; }
-  			$output .= $level . '<span class="level' . $level . ' stufe' . $row->bonuslevel . $eigen . '" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id .  ') ' . $row->first_name . '</span><br>' . boucado_downline_tree($statistik, $row->member_id, $sponsor_id, $level+1);
+  			$output .= $level . '<span class="level' . $level . ' stufe' . $row->bonuslevel . $eigen . '" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id .  ') ' . $row->first_name . '</span><br>' . boucado_downline_tree($statistik, $row->member_id, $sponsor_id, $level+1,$matrix);
   		}
  		db_set_active();
 		return $output;
@@ -790,8 +792,7 @@ function boucado_downline_tree(&$statistik, $uid, $sponsor_id, $level=1) {
 
 function boucado_resettests() {
 	db_set_active('boucado_matrix');	
-	$result = db_query("DELETE FROM {test_members} WHERE member_id > 1");
-	$result = db_query("DELETE FROM {test_matrix} WHERE member_id > 1");	
+	$result = db_query("DELETE FROM {boucado_members} WHERE member_id > 20 OR member_id=0");
 	db_set_active();
 	$statistik = array();
 	$output = boucado_downline_tree($statistik,1,1,1);
@@ -809,7 +810,7 @@ function new_TestMember($sponsor_id) {
 	
 	// Insert in table
 	try {
-		$member_id = db_insert('test_members')
+		$member_id = db_insert('boucado_members')
 			->fields(array('sponsor_id','bonuslevel','username','first_name','last_name'))
 			->values(array(
 				'sponsor_id' => $sponsor_id,
@@ -832,7 +833,7 @@ function new_TestMember($sponsor_id) {
 	for ($i=1; $i <= $anz; $i++) { 	
 		if ($sponsor_id == -1) { // Sponsor aus DB holen, sonst den angegebenen $sponsor verwenden
 			db_set_active('boucado_matrix');
-			$result = db_query("SELECT member_id FROM {test_members} ORDER BY rand() LIMIT 1;");
+			$result = db_query("SELECT member_id FROM {boucado_members} ORDER BY rand() LIMIT 1;");
 			$sponsor = $result->fetchCol();
 			$next_id = $sponsor[0];
 			db_set_active();
@@ -857,15 +858,17 @@ function boucado_inMatrix($member_id, $sponsor_id) {
 	$host_id = $nextone[0]['uid'];
 	
 	db_set_active('boucado_matrix');
-	$matrix_id = db_insert('test_matrix')
-	->fields(array('member_id','host_id'))
-	->values(array('member_id' => $member_id, 'host_id' => $host_id))
-	->execute();
-	
-	db_update('test_members')
-	->fields(array('last_hosted' => date("Y-m-d H:i:s", time())))
-	->condition('member_id',$host_id,'=')
-	->execute();
+	// Dem Member die host_id eintragen
+	db_update('boucado_members')
+		->fields(array('host_id' => $host_id))
+		->condition('member_id', $member_id, '=')
+		->execute();
+
+	// Dem Host das Datum eintragen
+	db_update('boucado_members')
+		->fields(array('last_hosted' => date("Y-m-d H:i:s", time())))
+		->condition('member_id',$host_id,'=')
+		->execute();
 	
 	db_set_active();	
 	
@@ -875,7 +878,7 @@ function boucado_inMatrix($member_id, $sponsor_id) {
 
 function getFirstLevelCount($id) {
 	db_set_active('boucado_matrix');
-	$result = db_query("SELECT count(*) FROM {test_matrix} WHERE host_id = '" . $id . "'")->fetchCol();
+	$result = db_query("SELECT count(*) FROM {boucado_members} WHERE host_id = '" . $id . "'")->fetchCol();
 	db_set_active();
 	return $result[0];
 }
@@ -884,7 +887,7 @@ function getSecondLevelCount($id){
 	db_set_active('boucado_matrix');
 	
 	// mal alle direkten downlines holen:
-	$result = db_query("SELECT member_id FROM {test_matrix} WHERE host_id = '" . $id . "' order by member_id");
+	$result = db_query("SELECT member_id FROM {boucado_members} WHERE host_id = '" . $id . "' order by member_id");
 
 	if ($result->rowCount()) {
 		$ids_anz = array();
@@ -895,7 +898,7 @@ function getSecondLevelCount($id){
 		$min_anz = 0;
 		foreach ($result as $row) {
 			// wie viele downlines haben die in der ersten Reihen schon?
-			$result1 = db_query("SELECT host_id, count(*) as anz FROM {test_matrix} WHERE host_id = '" . $row->member_id . "' group by host_id order by count(*), host_id");
+			$result1 = db_query("SELECT host_id, count(*) as anz FROM {boucado_members} WHERE host_id = '" . $row->member_id . "' group by host_id order by count(*), host_id");
 			if ($result1->rowCount()) { // wenn überhaupt, dann
 				$anz = $result1->fetchCol(1);
 				$host_id = $result1->fetchCol(0);
@@ -939,7 +942,7 @@ function getNextLevelIds(&$nextone, $sponsor_id) {
 		} else { // zweite Reihe ist voll, wer ist der Nächste? Wer hat noch nicht, wer will nochmal?
 			db_set_active('boucado_matrix');	
 			// wer sind die 3 Kandidaten?
-			$result = db_query("SELECT member_id FROM {test_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") order by last_hosted asc, member_id");
+			$result = db_query("SELECT member_id FROM {boucado_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") order by last_hosted asc, member_id");
 			$geschafft = 0;
 			foreach ($result as $row) {
 				$next_id = $result->fetchCol();
@@ -953,7 +956,7 @@ function getNextLevelIds(&$nextone, $sponsor_id) {
 			}
 			if (!$geschafft) {
 				db_set_active('boucado_matrix');
-				$result = db_query("SELECT member_id FROM {test_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") ORDER by rand() LIMIT 1");
+				$result = db_query("SELECT member_id FROM {boucado_members} WHERE member_id IN (" . $second_level_counts['host_ids'] . ") ORDER by rand() LIMIT 1");
 				$next_id = $result->fetchCol();
 				db_set_active();
 				getNextLevelIds($nextone, $next_id[0]);				
@@ -969,10 +972,10 @@ function update_upline($member_id, $level = 1) {
 		return; 
 	} else {
 		db_set_active('boucado_matrix');
-		$result = db_query("SELECT host_id FROM {test_matrix} WHERE member_id = " . $member_id);
+		$result = db_query("SELECT host_id FROM {boucado_members} WHERE member_id = " . $member_id);
 		$host = $result->fetchCol();
 		$host_id = $host[0];		
-		db_update('test_members')
+		db_update('boucado_members')
 		->fields(array('last_downline' => date("Y-m-d H:i:s", time())))
 		->condition('member_id',$host_id,'=')
 		->execute();
@@ -1027,9 +1030,18 @@ function boucado_payment_success($processor){
 	
 	db_set_active('boucado_matrix');
 
+	// bonuslevel aktualisieren
+	$result = db_query("SELECT bid FROM bonuslevels WHERE cost = " . $_GET['amt']);
+	$row = $result->fetchAssoc();
+	
+	db_update('boucado_members')
+	->fields(array('bonuslevel' => $row['bid']))
+	->condition('username',$_GET['item_number'],'=')
+	->execute();
+
 	// Insert in table
 	try {
-		$payment_id = db_insert('test_payments')
+		$payment_id = db_insert('payments')
 			->fields(array('username','transaction','status','amount','currency','bonuslevel'))
 			->values(array(
 				'username' => $_GET['item_number'],
@@ -1067,9 +1079,8 @@ function pay_upline($member_id, $payment_id, $level = 1) {
 		return; 
 	} else {
 		db_set_active('boucado_matrix');
-		$result = db_query("SELECT host_id, bonuslevel FROM test_matrix m, test_members n WHERE m.member_id = n.member_id AND n.member_id = " . $member_id);
+		$result = db_query("SELECT host_id, bonuslevel FROM boucado_members  WHERE member_id = " . $member_id);
 		$row = $result->fetchAssoc();
-		dpm($row);
 		$host_id = $row['host_id'];	
 		$bonuslevel = $row['bonuslevel'];
 		db_set_active();
