@@ -3,7 +3,11 @@ body {}
 /* Downlines */
 
 .eigen {
-	border:1px solid #FF3521;
+	border:1px dashed #FF3521;
+}
+
+.depth {
+	color: red;
 }
 
 .level1 {
