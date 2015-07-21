@@ -54,3 +54,8 @@ body {}
 a.istaktiv-1 {
 	background-color:#ff3521;
 }
+
+.status-white {background-color:white; border:1px solid #666666;width:10px;}
+.status-green {background-color:green; border:1px solid #666666;width:10px;}
+.status-yellow {background-color:yellow; border:1px solid #666666;width:10px;}
+.status-red {background-color:red; border:1px solid #666666;width:10px;}

@@ -91,7 +91,7 @@ function boucado_menu() {
   );
       	
   $items['boucado/matrix/%'] = array(
-    'title' => 'My Matris',
+    'title' => 'My 3x9 Matris',
     'description' => 'My BOUCADO matrix',
     'page callback' => 'boucado_mymatrix',
     'page arguments' => array(2),
@@ -99,7 +99,7 @@ function boucado_menu() {
   );
   
   $items['boucado/matrix'] = array(
-    'title' => 'My Matrix',
+    'title' => 'My 3x9 Matrix',
     'description' => 'My BOUCADO matrix',
     'page callback' => 'boucado_mymatrix',
     'page arguments' => array(2),    
@@ -184,6 +184,15 @@ function boucado_menu() {
     'access arguments' => array('administer site configuration'),
   );
   
+  $items['payment/payments'] = array(
+    'title' => t('My Payments'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('boucado_payment_pay_form'),
+      'access callback' => TRUE,
+      'access arguments' => array('access own boucado'),
+      'type' => MENU_CALLBACK,      
+  );  
+  
      // path with autocomplete function for cities
   $items['username/autocomplete'] = array(
       'title' => 'Autocomplete for usernames',
@@ -199,24 +208,6 @@ function boucado_menu() {
       'access callback' => TRUE,
       'type' => MENU_CALLBACK,
     );
-	
-	
-    $items['boucado/user'] = array(
-        'title' => t('BOUCADO User'),
-        'page arguments' => array('0'),  
-        'page callback' => 'boucado_userinfo',
-        'access arguments' => array('access own boucado'),
-        'type' => MENU_CALLBACK,
-    );
-	
-    $items['boucado/user/%'] = array(
-        'title' => t('BOUCADO User'),
-        'page arguments' => array(2),  
-        'page callback' => 'boucado_userinfo',
-        'access arguments' => array('access all boucado'),
-        'type' => MENU_CALLBACK,
-    );
-	
 	
     $items['boucado/wallet'] = array(
         'title' => t('My Wallet'),
@@ -234,8 +225,85 @@ function boucado_menu() {
         'type' => MENU_CALLBACK,
     );
 		
+  $items['boucado/mypayments/%'] = array(
+    'title' => 'My Payments',
+    'description' => 'My BOUCADO payments',
+    'page callback' => 'boucado_payments_mypayments',
+    'page arguments' => array(2),
+    'access arguments' => array('access all boucado'),
+  );
+  
+  $items['boucado/mypayments'] = array(
+    'title' => 'My Payments',
+    'description' => 'My BOUCADO Payments',
+    'page callback' => 'boucado_payments_mypayments',
+    'page arguments' => array(2),    
+    'access arguments' => array('access own boucado'),
+  );
+			
+  		
 	return $items;
 }
+
+
+function boucado_block_info() {
+  $blocks = array();
+
+  $blocks['BOUCADO Member'] = array(
+    'info' => t('BOUCADO Member'),
+  );
+
+  return $blocks;
+}
+
+/**
+* Implements hook_block_view().
+*/
+function boucado_block_view($delta = '') {
+  $block = array();
+
+  switch ($delta) {
+    case 'BOUCADO Member':
+      $block['subject'] = '';
+      $block['content'] = _BOUCADO_member_block_content();
+      break;
+  }
+
+  return $block;
+}
+
+function _BOUCADO_member_block_content() {
+global $user;
+global $theme;
+
+	$user_item = user_load($user->uid); 
+	$member = boucado_get_userdata($user->name);
+	$output = t('Hello ') . $member->first_name . "!<br>";
+
+	db_set_active('boucado_matrix');
+	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $user->name ."'";
+	$result = db_query($sql)->fetchCol();
+	$total = $result[0];
+	if ($total=="") {$total="0.00";}
+
+	$sql = "SELECT title FROM bonuslevels WHERE bid='" . $member->bonuslevel ."'";
+	$result = db_query($sql)->fetchCol();
+	$level = $result[0];
+
+	db_set_active();
+
+	if($user_item->uid && isset($user_item->picture, $user_item->picture->uri)){
+		$output .= l(theme_image_style(array('path' => $user_item->picture->uri, 'width'=>'160px','height'=>'160px','style_name' => 'avatar')), '/user', array('html' => TRUE));
+	} else {
+		 $output .= l('<img width="160" src=" ' . base_path() . drupal_get_path('theme', $theme) . '/user-avatar.png" />', '/user', array('html' => TRUE)) ;
+    }
+	$output .= "<br>" . t("Your status is: ") . "<span style='padding:0.5em;border:1px solid #999;background-color:" . $member->status . ";'>" . t($member->status) . "</span>";
+	$output .= "<br><br>" . t("Your level is: ") . $level;
+	$output .= "<br>" . t("Your balance is: ") . "€" . $total;
+	
+	return $output;
+}
+
 
 function boucado_join() {
 	$_SESSION['sponsor_uid'] = "";
@@ -288,10 +356,19 @@ function boucado_user_presave(&$edit, $account, $category) {
 	
   if ($account->uid // user is not new
       && $account->status === "0" && $edit['status']==1) { // user is being activated
-    
+
+    // Benutzer Rolle setzen
+	if ($role = user_role_load_by_name('FREE')) {
+        user_multiple_role_edit(array($member->member_id), 'add_role', $role->rid);
+		drupal_set_message("Der Benutzer wurde der Status 'FREE' zugeteilt.");
+      }    
+/*    
+ 	// Member in Matrix platzieren:
     $member = boucado_get_userdata($account->name);
 	boucado_inMatrix($member->member_id, $member->sponsor_id);
 	drupal_set_message("Der Benutzer wurde in der Matrix platziert.");
+	// passiert jetzt erst beim Bezahlen
+*/
   }
 }
 
@@ -316,6 +393,11 @@ function boucado_get_userdata($username) {
 global $user;
 	
 	if ($username=="") {$username = $user->name;}
+	  // For convenience, we'll allow user ids as well as full user objects.
+	if (is_numeric($username)) {
+		$member = user_load($username);
+		$username = $member->name; 
+	}
 
 	if ($username=="Demo") {
 
@@ -436,16 +518,97 @@ global $user;
 		$thisuser->upline_bonuslevel = 5;
 	}
 	
-
+	// Ablaufdaten holen
+	$thisuser->status = boucado_is_user_active($thisuser);
+	
 	return $thisuser;
 }
+
+
+function boucado_is_user_active(&$thisuser) {
+	
+	
+	db_set_active('boucado_matrix');
+
+	$sql = "SELECT DATE(date_time) from payments where member_id = " . $thisuser->member_id . " ORDER BY date_time DESC LIMIT 1";
+	$payments = db_query($sql)->fetchCol();
+		
+	if (!$payments) {
+		$thisuser->last_payment = "No payment made";
+		$thisuser->expiration_date = "No payment made";
+		$thisuser->tolerance_date = "No payment made";
+		$thisuser->tolerance_over_date = "No payment made";			
+		db_set_active();
+		return "red";
+	}
+	$last_payment = $payments[0];
+	
+	$sql = "SELECT the_key, the_val FROM boucado_settings WHERE the_key IN ('PayInterval','PayTolerance','PayToleranceOver')";
+	$tolerance = db_query($sql)->fetchAllKeyed();
+	$payment_interval = $tolerance['PayInterval'];
+	$tolerance_days = $tolerance['PayTolerance'];;
+	$tolerance_over_days = $tolerance['PayToleranceOver'];
+
+	db_set_active();
+
+	$last_payment_date= new DateTime($last_payment);
+	$last_payment_date_string = $last_payment_date->format('d.m.Y');
+	
+	$last_payment_date->add(new DateInterval("P" . $payment_interval . "D"));
+	$expiration_date_string = $last_payment_date->format('d.m.Y');
+	
+	$last_payment_date->add(new DateInterval("P" . $tolerance_days . "D"));
+	$tolerance_date_string = $last_payment_date->format('d.m.Y');	
+		
+	$last_payment_date->add(new DateInterval("P" . $tolerance_over_days . "D"));
+	$tolerance_over_date_string = $last_payment_date->format('d.m.Y');
+			
+	$today = new DateTime(date(''));
+	
+	$expiration_date = new DateTime($expiration_date_string);
+	$expiration_date_diff = $today->diff($expiration_date);
+	
+	$is_expired = (int)$expiration_date_diff->format("%r%a");
+	
+	$tolerance_date = new DateTime($tolerance_date_string);
+	$tolerance_date_diff = $today->diff($tolerance_date);
+	
+	$is_in_tolerance = (int)$tolerance_date_diff->format("%r%a");
+	
+	$tolerance_over_date = new DateTime($tolerance_over_date_string);
+	$tolerance_over_date_diff = $today->diff($tolerance_over_date);
+	
+	$is_outof_tolerance = (int)$tolerance_over_date_diff->format("%r%a");
+
+	$thisuser->last_payment = $last_payment_date_string;
+	$thisuser->expiration_date = $expiration_date_string;
+	$thisuser->tolerance_date = $tolerance_date_string;
+	$thisuser->tolerance_over_date = $tolerance_over_date_string;
+	
+	if ($is_outof_tolerance <0) {
+		$thisuser->status = "red";
+		return "red";
+	} else 
+		if (($is_outof_tolerance >= 0) && ($is_in_tolerance <= 0)) {
+			$thisuser->status = "yellow";
+			return "yellow";
+		} else 
+			if (($is_in_tolerance >= 0) && ($is_expired <= 0)) {
+				$thisuser->status = "green";
+				return "green";
+			} else {
+				$thisuser->status = "white";
+				return "white";
+			}
+}
+
 
 function boucado_user_delete($account) {
 	// Benutzer aus boucado matrix löschen
 	db_set_active('boucado_matrix');
 
 	$num_deleted = db_delete('boucado_members')
-		->condition('username', $account->name)
+		->condition('member_id', $account->uid)
 		->execute();
 
 	db_set_active();	
@@ -501,45 +664,6 @@ function boucado_sendmail() {
 	}
 	
 }
-
-function boucado_userinfo($uid) {
-global $user;
-	
-	if($uid!='0') {
-		$userdata = boucado_get_userdata($uid);
-	} else {
-		$uid = $user->uid;
-		$userdata = boucado_get_userdata($uid);
-	}
-	
-	$output = "Username: " . $userdata->user . "<br>";
-	$output .= "Handicap: " . $userdata->hcp . "<br>";
-
-
-	$output .= "<hr><br><h3>Letzte Runden:</h3>";
-	$output .= "<div id='user_rounds'>";
-
-	db_set_active('boucado_matrix');
-	
-$query = db_select('rounds')->extend('PagerDefault'); 
- $query->fields('rounds', array('id', 'course', 'date', 'score', 'hcpdiff'));    
- $query->condition('uid', $uid, '=');
- $query->orderBy('id', 'DESC');
- $result = $query ->limit(10)->execute()->fetchAll();
-db_set_active();
- $output .= "<table id='tbl_rounds'><tr><th>Course</th><th>Date</th><th>Score</th><th>HCP Diff</th></tr>";
- foreach ($result as $row) {
-	$output .= "<tr><td>" . $row->course . "</td><td>" . $row->date . "</td><td>" . $row->score . "</td><td>" . $row->hcpdiff . "</td></tr>";
- }
- $output .= "</table><br>"; 
-
-$output .= theme('pager', array('tags' => array()));
-$output .= "</div> <!-- user_rounds -->";
-return $output; 
-
-}
-
-
 
 function boucado_mynetworks($net_id, $membername) {
 
@@ -764,7 +888,7 @@ global $user;
 	}	
 	
 	$statistik = array();
-	$bonuslevels = array('BRONCE'=>0, 'SILVER'=>0, 'GOLD'=>0,'PLATIN'=>0);
+	$bonuslevels = array('FREE'=>0, 'BRONCE'=>0, 'SILVER'=>0, 'GOLD'=>0,'PLATIN'=>0);
 	$output = "";
 	
 	$tree = boucado_downline_tree($statistik, $bonuslevels, $userdata->member_id, $userdata->member_id,1,false,9);
@@ -781,8 +905,15 @@ global $user;
 		$output .= "Level " . $i . ": " . $levels[$i] . "<br>";
 	}
 	$output .= "<p><b>" . t("Total") . ": ". $gesamt . "</b></p>";
+
+	$output .= "<h3>Bonuslevels:</h3>";
+	$output .= "FREE: " . $bonuslevels['FREE'] . "<br>";	
+	$output .= "BRONCE: " . $bonuslevels['BRONCE'] . "<br>";
+	$output .= "SILVER: " . $bonuslevels['SILVER'] . "<br>";
+	$output .= "GOLD: " . $bonuslevels['GOLD'] . "<br>";
+	$output .= "PLATIN: " . $bonuslevels['PLATIN'] . "<br>";
 	$output .= "<br><hr><br>";
-	
+			
 	$output .= $tree;
 	
 	return $output;
@@ -797,7 +928,6 @@ global $user;
 		$uid = $user->name;
 		$userdata = boucado_get_userdata($uid);
 	}	
-	
 		// Bis zu welcher Tiefe bekommt der Empfänger den Bonus?
 	db_set_active('boucado_matrix');
 	$sql = "SELECT title, depth FROM boucado_members m, bonuslevels b WHERE m.bonuslevel = b.bid AND m.username='" . $userdata->username . "'";
@@ -807,7 +937,7 @@ global $user;
 	db_set_active();
 	
 	$statistik = array();
-	$bonuslevels = array('BRONCE'=>0, 'SILVER'=>0, 'GOLD'=>0,'PLATIN'=>0);
+	$bonuslevels = array('FREE'=>0, 'BRONCE'=>0, 'SILVER'=>0, 'GOLD'=>0,'PLATIN'=>0);
 	$output = "<h3>Bonuslevel: " . $title . "</h3>";
 	$output .= "<h3>" . t("Paylevels: ") . $depth . "</h3>";
 	
@@ -845,13 +975,14 @@ global $user;
 
 function boucado_downline_tree(&$statistik, &$bonuslevels, $uid, $sponsor_id, $level=1, $matrix=true, $depth) {
 	if ($level>9) {return;} // Abbruch nach 9 Leveln
+	// if ($sponsor_id==0) {return;} // Abbruch bei inaktiven Usern
 	
 	db_set_active('boucado_matrix');
 
 	if ($matrix) { // 3x9 Matrix oder richtige Downline anzeigen?
-		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id FROM {boucado_members} WHERE host_id=" . $uid . " ORDER by member_id";
+		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id, host_id FROM {boucado_members} WHERE host_id=" . $uid . " ORDER by member_id";
 	} else {
-		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id FROM {boucado_members} WHERE sponsor_id=" . $uid . " ORDER by member_id";		
+		$sql = "SELECT member_id, bonuslevel, username, first_name, last_name, sponsor_id, host_id FROM {boucado_members} WHERE sponsor_id=" . $uid . " ORDER by member_id";		
 	}
 	$result = db_query($sql);
 	
@@ -867,13 +998,14 @@ function boucado_downline_tree(&$statistik, &$bonuslevels, $uid, $sponsor_id, $l
 		$statistik[] = array('level' => $level, 'count' => $count);
 		foreach ($result as $row) {
 			if ($sponsor_id == $row->sponsor_id) {$eigen = " eigen"; }
+			$member_status = boucado_is_user_active($row);
 			db_set_active('boucado_matrix');
 			$sql = "SELECT title, depth FROM boucado_members m, bonuslevels b WHERE m.bonuslevel = b.bid AND m.member_id='" . $row->member_id . "'";
 			$levels = db_query($sql)->fetchAll();
 			$bonustitle = $levels[0]->title;
 			$bonuslevels[$bonustitle] = $bonuslevels[$bonustitle] + 1; 
-			db_set_active('');
-  			$output .= $level . '<span class="level' . $level . ' stufe' . $row->bonuslevel . $eigen . $depthclass . ' ' . $bonustitle . '" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id .  ') ' . $row->first_name . ' (' . substr($bonustitle,0,1) . ')</span><br>' . boucado_downline_tree($statistik, $bonuslevels, $row->member_id, $sponsor_id, $level+1,$matrix,$depth);
+			db_set_active();
+			$output .= '<span class="status-' . $member_status . '">&nbsp;' .$level . '&nbsp;</span><span class="level' . $level . ' stufe' . $row->bonuslevel . $eigen . $depthclass . ' ' . $bonustitle . '" style="padding-left:' . $level*20 . 'px;">' . $row->username . ' (id: ' . $row->member_id .  ') ' . $row->first_name . ' (' . substr($bonustitle,0,1) . ')</span><br>' . boucado_downline_tree($statistik, $bonuslevels, $row->member_id, $sponsor_id, $level+1,$matrix,$depth);
   		}
  		db_set_active();
 		return $output;
@@ -1101,7 +1233,7 @@ function compareHostIds($a, $b)
 }
 
 function print_pre($p,$titel="") {
-	print $titel . ": "; 
+	if ($titel<>"") {print $titel . ": ";} 
 	print "<pre>";
 	print_r($p);
 	print "</pre>";
@@ -1125,9 +1257,10 @@ function boucado_payment_manually_form($form, &$form_state) {
 	db_set_active('boucado_matrix');
     $query = db_select('bonuslevels','b');
     $query->fields('b', array('title', 'cost',));
+	$query->condition('title','FREE','<>');	
     $query->orderBy('order_index', 'ASC');
     $results = $query->execute();
-
+ 
 	//define rows
 	$options = array();
 	foreach ($results as $result) {
@@ -1141,7 +1274,7 @@ function boucado_payment_manually_form($form, &$form_state) {
         '#options' => $options,
     );
 	         
-	$form['transaction'] = array(
+	$form['transaction_id'] = array(
           '#type' => 'textfield',
           '#title' => t('Transaction ID'),
           '#size' => 30,
@@ -1168,7 +1301,7 @@ function boucado_payment_manually_form_validate($form, &$form_state) {
 
 function boucado_payment_manually_form_submit($form, &$form_state) {
 	$message = $form_state['values']['bonuslevel'] . " for user '" . $form_state['values']['username'] . "' paid.";
-	boucado_payment_pay($form_state['values']['username'],$form_state['values']['transaction'],"Manually",$form_state['values']['bonuslevel'],$message);
+	boucado_payment_pay('Manuell',$form_state['values']['username'],$form_state['values']['transaction_id'],"Manually",$form_state['values']['bonuslevel'],$message);
 }
 
 
@@ -1203,7 +1336,7 @@ function boucado_payment_success($processor){
 			$danke = t("Your payment with PayPal was successful. The transaction was completed and you will receive an email with the confirmation about your payment. You can login at <a href='http://www.paypal.com' target='_blank'>www.paypal.com</a> and control the transaction details.");
 			$danke .= "<br>";
 			$danke .= "<p><b>PayPal Transaction ID: " . $_GET['tx'] . "</b></p>";
-			boucado_payment_pay($_GET['item_number'],$_GET['tx'],$_GET['st'],$_GET['amt'],$danke);
+			boucado_payment_pay('PayPal',$_GET['item_number'],$_GET['tx'],$_GET['st'],$_GET['amt'],$danke);
 			break;
 		
 		default:
@@ -1211,19 +1344,34 @@ function boucado_payment_success($processor){
 			break;
 	}
 	
-	return $danke;
+	return "";
 }
 
-function boucado_payment_pay($username,$transaction,$status,$amount,$danke = '') {
+function boucado_payment_pay($processor, $username,$transaction_id,$status,$amount,$danke = '') {
+		
+	print($amount);
+	
+	$member = boucado_get_userdata($username);
+	
 	db_set_active('boucado_matrix');
 
-	if ($transaction == 'manually') {
-		$transaction = time();
+	if ($transaction_id == 'manually') {
+		$transaction_id = time();
 	}
 	
+	// transaction_id id testen
+	$result = db_query("SELECT transaction_id FROM payments WHERE transaction_id = '" . $transaction_id . "'");
+	if ($result->fetchAssoc()) {
+		db_set_active();
+		drupal_set_message(t("Payment already saved."));
+		drupal_set_message($danke);
+		return;		
+	};
+	
 	// bonuslevel aktualisieren
-	$result = db_query("SELECT bid FROM bonuslevels WHERE cost = " . $amount);
+	$result = db_query("SELECT title, bid FROM bonuslevels WHERE cost = '" . $amount ."'");
 	$row = $result->fetchAssoc();
+	$bonustitle = $row['title'];
 	$bonuslevel = $row['bid'];
 	
 	db_update('boucado_members')
@@ -1231,19 +1379,44 @@ function boucado_payment_pay($username,$transaction,$status,$amount,$danke = '')
 	->condition('username',$username ,'=')
 	->execute();
 
+	// Alle Bonuslevels für die Rollen holen
+    $query = db_select('bonuslevels','b');
+    $query->fields('b', array('title', 'cost',));
+	$query->condition('title','FREE','<>');
+    $query->orderBy('order_index', 'ASC');
+    $results = $query->execute();
+	db_set_active();
+	
+	foreach ($results as $roles) {
+		_remove_role_from_user($member->member_id, $roles->title);
+	}
+	
+	// Benutzer Rolle setzen
+	if ($role = user_role_load_by_name($bonustitle)) {
+        user_multiple_role_edit(array($member->member_id), 'add_role', $role->rid);
+      }
+	
+	db_set_active('boucado_matrix');	
 	// Insert in table
 	try {
 		$payment_id = db_insert('payments')
-			->fields(array('username','transaction','status','amount','bonuslevel'))
+			->fields(array('processor','member_id','username','transaction_id','status','amount','bonuslevel'))
 			->values(array(
+				'processor' => $processor,
+				'member_id' => $member->member_id,
 				'username' => $username,
-				'transaction' => $transaction,
+				'transaction_id' => $transaction_id,
 				'status' => $status,
 				'amount' => $amount,
 				'bonuslevel' => $bonuslevel))
 			->execute();
 		db_set_active();
-		boucado_pay_uplines($payment_id, $transaction, $username, $bonuslevel);
+		if ($member->host_id == 1) {
+		 	// Member in Matrix platzieren:
+			boucado_inMatrix($member->member_id, $member->sponsor_id);
+			drupal_set_message("Der Benutzer wurde in der Matrix platziert.");			
+		}
+		boucado_pay_uplines($payment_id, $transaction_id, $username, $bonuslevel);
 		drupal_set_message($danke);
 	} catch (PDOException $e) {
 		dpm($e->getMessage());
@@ -1252,20 +1425,47 @@ function boucado_payment_pay($username,$transaction,$status,$amount,$danke = '')
 	}
 }
 
+function _remove_role_from_user($user, $role_name) {
+  // For convenience, we'll allow user ids as well as full user objects.
+  if (is_numeric($user)) {
+    $user = user_load($user); 
+  }
+  // Only remove the role if the user already has it.
+  $key = array_search($role_name, $user->roles);
+  if ($key == TRUE) {
+    // Get the rid from the roles table.
+    $roles = user_roles(TRUE);
+    $rid = array_search($role_name, $roles);
+    if ($rid != FALSE) {
+      // Make a copy of the roles array, without the deleted one.
+      $new_roles = array();
+      foreach($user->roles as $id => $name) {
+        if ($id != $rid) {
+          $new_roles[$id] = $name;
+        }
+      }
+      user_save($user, array('roles' => $new_roles));
+    }
+  }
+}
 function boucado_payment_cancel(){
 	$cancel = t("<h2>You canceled the payment.</h2>");
 	return $cancel;
 }
 
-function boucado_pay_uplines($payment_id, $transaction, $username, $bonuslevel) {
+function boucado_pay_uplines($payment_id, $transaction_id, $username, $bonuslevel) {
 	$payer = boucado_get_userdata($username);
-	pay_upline($payer->username, $payer->upline, $payment_id, $transaction, $bonuslevel, 1); 
+	pay_upline($payer->username, $payer->upline, $payment_id, $transaction_id, $bonuslevel, 1); 
 }
 
 // Upline rekursiv bis zur 9. Ebene aktualisieren
-function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer_bonuslevel, $level) {
-	if ($upline_name == "admin") {
-		
+function pay_upline($payer_name, $upline_name, $payment_id, $transaction_id, $payer_bonuslevel, $level) {
+
+	$payer = boucado_get_userdata($payer_name);
+	$receiver = boucado_get_userdata($upline_name);
+	$admin_name = boucado_get_username(1);
+
+	if ($receiver->member_id == "1") { // der admin
 		// admin auszahlen:
 
 		// bonuslevel vergleichen und Betrag holen
@@ -1278,19 +1478,23 @@ function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer
 		$sql = "SELECT title FROM bonuslevels WHERE bid=" . $payer_bonuslevel;
 		$result = db_query($sql)->fetchCol();
 		$bonus = $result[0];
-
+		
+		$description = "TOP";
+		
 		// Insert in table
 		try {		
 			db_insert('wallet')
-			->fields(array('amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
+			->fields(array('amount','from_id','from_name','to_id','to_name','type_cash','descr','payment_id','transaction_id', 'level'))
 			->values(array(
 			'amount' => $adminfee,
-			'from_id' => $payer_name,
-			'to_id' => $upline_name,
+			'from_id' => $payer->member_id,
+			'from_name' => $payer_name,
+			'to_id' => $receiver->member_id,			
+			'to_name' => $admin_name,
 			'type_cash' => $bonus,
-			'descr' => 'TOP',
+			'descr' => $description,
 			'payment_id' => $payment_id,
-			'transaction' => $transaction,
+			'transaction_id' => $transaction_id,
 		 	'level' => $level
 			))
 			->execute();
@@ -1301,13 +1505,12 @@ function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer
 		}
 
 		 db_set_active();		
-		drupal_set_message($bonus . ": " . $payer_name . "->admin" . ": (" . $adminfee . ".00)");
+		drupal_set_message($bonus . "(" . $description . "): " . ": " . $payer_name . "->admin" . ": (" . $adminfee . ".00)");
 		return;		
 	} 
 	else if ($level > 9) { // 9 Ebenen und aus
 		return; 
 	} else {
-		$receiver = boucado_get_userdata($upline_name);
 		$receiver_bonuslevel = $receiver->bonuslevel;
 		$next_upline = boucado_get_userdata($receiver->upline);
 
@@ -1319,7 +1522,7 @@ function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer
 		// Wer bekommt von wem wie viel?
 		$sql = "SELECT amount FROM fees WHERE from_bonuslevel=" . $payer_bonuslevel . " AND to_bonuslevel=" . $receiver_bonuslevel;
 		$fees = db_query($sql)->fetchCol();
-		$amount = $fees{0};
+		$amount = $fees[0];
 		
 		// Wie heißt der Bonuslevel?
 		$sql = "SELECT title FROM bonuslevels WHERE bid=" . $payer_bonuslevel;
@@ -1353,11 +1556,25 @@ function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer
 		 */				 
 		
 		$description = "OK";
+		// Payer hat höheren Bonuslevel als Receiver
 		if ($bonusdifference > 0) {
 			$description = "DIFF";
 		}
+
+		$to_admin = false;
+		// Receiver ist "RED" (inaktiv) 
+		if ($receiver->status == "red") {
+			$description = "RED";
+			$to_admin = true;
+		}
+				
+		// Receiver hat zu geringen Level und bekommt nichts mehr vom Level des Payers
 		if ($level > $depth) {
 			$description = "LEVEL";
+			$to_admin = true;
+		}
+		
+		if ($to_admin) {
 			$bonusdifference = $amount;
 			$amount = 0;
 		}
@@ -1365,53 +1582,58 @@ function pay_upline($payer_name, $upline_name, $payment_id, $transaction, $payer
 		// Insert in table
 		try {		
 			db_insert('wallet')
-			->fields(array('amount','v_amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
+			->fields(array('amount','v_amount','from_id','from_name','to_id','to_name','type_cash','descr','payment_id','transaction_id', 'level'))
 			->values(array(
 			'amount' => $amount,
 			'v_amount' => $bonusdifference,
-			'from_id' => $payer_name,
-			'to_id' => $upline_name,
+			'from_id' => $payer->member_id,
+			'from_name' => $payer_name,
+			'to_id' => $receiver->member_id,	
+			'to_name' => $upline_name,
 			'type_cash' => $bonus,
 			'descr' => $description,
 			'payment_id' => $payment_id,
-			'transaction' => $transaction,
+			'transaction_id' => $transaction_id,
 		 	'level' => $level
 			))
 			->execute();
 			db_set_active();
-		 drupal_set_message($bonus . ": " . $payer_name . "->" . $upline_name . ": (" . $amount . ")");
+		 drupal_set_message($bonus . " (" . $description . "): " . $payer_name . "->" . $upline_name . ": (" . $amount . ")");
 		} catch (PDOException $e) {
 			dpm($e->getMessage());
 			db_set_active();
 		}
 
 		if ($bonusdifference > 0) { // der admin bekommt den Rest
+
 			db_set_active('boucado_matrix');
 			try {		
 				db_insert('wallet')
-				->fields(array('amount','from_id','to_id','type_cash','descr','payment_id','transaction', 'level'))
+				->fields(array('amount','v_amount','from_id','from_name','to_id','to_name','type_cash','descr','payment_id','transaction_id', 'level'))
 				->values(array(
 				'amount' => $bonusdifference,
-				'from_id' => $payer_name,
-				'to_id' => 'admin',
+				'v_amount' => '0.00',
+				'from_id' => $payer->member_id,
+				'from_name' => $payer_name,
+				'to_id' => '1',	
+				'to_name' => $admin_name,
 				'type_cash' => 'ADMIN',
 				'descr' => $description,
 				'payment_id' => $payment_id,
-				'transaction' => $transaction,
+				'transaction_id' => $transaction_id,
 			 	'level' => $level
 				))
 				->execute();
 				db_set_active();
-		 		drupal_set_message("ADMIN: " . $payer_name . "->" . $upline_name . ": (" . $bonusdifference . ".00)");				
+		 		drupal_set_message("ADMIN (" . $description . "): " . $payer_name . "->" . $upline_name . ": (" . $bonusdifference . ")");				
 			} catch (PDOException $e) {
 				dpm($e->getMessage());
 				db_set_active();
 			}			
-		}
-		
+ 		}
 
 		 db_set_active();
-		pay_upline($payer_name, $next_upline->username, $payment_id, $transaction, $payer_bonuslevel, $nextlevel);
+		pay_upline($payer_name, $next_upline->username, $payment_id, $transaction_id, $payer_bonuslevel, $nextlevel);
  	}
 }
 
@@ -1431,8 +1653,9 @@ function boucado_test_pay_all() {
 		$sql = "SELECT cost FROM bonuslevels WHERE bid=" . $record->bonuslevel;
 		$result = db_query($sql);
 		$bonus = $result->fetchCol();
-
-		boucado_payment_pay($record->username,'manually','Manually',$bonus[0]);
+		
+		$transaction_id = rand(1000000,9999999);
+		boucado_payment_pay('Manuell', $record->username,$transaction_id,'OK',$bonus[0]);
 	}
 	
 
@@ -1443,7 +1666,9 @@ function boucado_test_pay_all_clear() {
 	db_set_active('boucado_matrix');
 	$num_deleted = db_delete('payments')->execute();
 	$num_deleted = db_delete('wallet')->execute();
+	$num_deleted = db_delete('payouts')->execute();
 	db_set_active();
+	return "Cleared.";
 }
 	
 function boucado_show_wallet($uid) {
@@ -1463,7 +1688,7 @@ global $user;
 		
 	// Summe berechnen:
 	db_set_active('boucado_matrix');
-	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_id='" . $username ."'";
+	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $username ."'";
 	$result = db_query($sql);
 	$total = $result->fetchCol();
 	db_set_active();
@@ -1473,7 +1698,7 @@ global $user;
 	$output .= "<div id='wallet'>";
 
 	$headline = array(
-		array('data' => t('From'), 'field' => 'from_id'),
+		array('data' => t('From'), 'field' => 'from_name'),
 		array('data' => t('Paid'), 'field' => 'amount'),
 		array('data' => t('Passed'), 'field' => 'v_amount'),
 		array('data' => t('Level'), 'field' => 'type_cash'),
@@ -1483,8 +1708,8 @@ global $user;
 
 	db_set_active('boucado_matrix');
 	$query = db_select('wallet') 
-	 ->fields('wallet', array('amount', 'v_amount', 'from_id', 'type_cash','descr','cash_date'))    
-	 ->condition('to_id', $username, '=')
+	 ->fields('wallet', array('amount', 'v_amount', 'from_name', 'type_cash','descr','cash_date'))    
+	 ->condition('to_name', $username, '=')
 	 ->extend('PagerDefault')
 	 ->extend('TableSort')
 	 ->orderByHeader($headline)
@@ -1494,15 +1719,15 @@ global $user;
 	db_set_active();
 
 
-  foreach($result as $stat_line) {
+  foreach($result as $row) {
     
     $table_rows[] = array(
-      array('data' => $stat_line->from_id),
-      array('data' => $stat_line->amount),
-      array('data' => $stat_line->v_amount),
-      array('data' => $stat_line->type_cash),
-      array('data' => $stat_line->descr),
-      array('data' => $stat_line->cash_date),
+      array('data' => $row->from_name),
+      array('data' => $row->amount),
+      array('data' => $row->v_amount),
+      array('data' => $row->type_cash),
+      array('data' => $row->descr),
+      array('data' => $row->cash_date),
     );
          
   }
@@ -1531,7 +1756,7 @@ function boucado_payment_withdraw_form($form, &$form_state) {
 global $user; 
 	// Summe berechnen:
 	db_set_active('boucado_matrix');
-	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_id='" . $user->name ."'";
+	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $user->name ."'";
 	$result = db_query($sql)->fetchCol();
 	$total = $result[0];
 	db_set_active();
@@ -1562,7 +1787,7 @@ function boucado_payment_withdraw_form_validate($form, &$form_state) {
 global $user;
 	// Summe berechnen:
 	db_set_active('boucado_matrix');
-	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_id='" . $user->name ."'";
+	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $user->name ."'";
 	$result = db_query($sql)->fetchCol();
 	$total = $result[0];
 	db_set_active();
@@ -1593,3 +1818,160 @@ global $user;
 	}	
 	db_set_active();
 }
+
+
+function boucado_payments_mypayments($uid) {
+global $user;
+
+	if($uid!='') {
+		$userdata = boucado_get_userdata($uid);
+		$uid = $userdata->member_id;
+	} else {
+		$uid = $user->uid;
+		$userdata = boucado_get_userdata($uid);
+	}	
+	
+	$output = "<div id='payments'>";
+
+	$headline = array(
+		array('data' => t('Processor')),
+		array('data' => t('Transaction ID')),
+		array('data' => t('Status'), 'field' => 'status'),
+		array('data' => t('Level'), 'field' => 'title'),
+		array('data' => t('Fee')),
+		array('data' => t('Currency')),
+		array('data' => t('Date'), 'field' => 'date_time', 'sort' => 'desc')
+	);
+
+	db_set_active('boucado_matrix');
+	$query = db_select('payments','p');
+	$query = $query->extend('PagerDefault')->extend('TableSort');	
+	$query->join('bonuslevels','b','p.bonuslevel=b.bid');
+	$query->fields('p', array('processor', 'transaction_id', 'status', 'amount','currency','date_time'));
+	$query->fields('b', array('title'));
+	$query->condition('p.member_id', $uid, '=');
+	$query->orderByHeader($headline);
+	$query->limit(25);
+
+	 $result = $query->execute()->fetchAll();
+
+	db_set_active();
+
+	$table_rows[] = array();
+  foreach($result as $row) {
+    
+    $table_rows[] = array(
+      array('data' => $row->processor),
+      array('data' => $row->transaction_id),
+      array('data' => $row->status),
+      array('data' => $row->title),
+      array('data' => $row->amount),
+      array('data' => $row->currency),
+      array('data' => $row->date_time),      
+    );
+         
+  }
+  
+  //return a themed schedule table
+  $output .= theme_table(array('header' => $headline,
+                           'rows' => $table_rows,
+                           'attributes' => array('class' => 'table_dfs', 'width' => '100%'),
+                           'caption' => '',
+                           'colgroups' => array(),
+                           'sticky' => FALSE,
+                           'empty' => 'No data is available',
+                          )); 
+						  	
+	$output .= theme('pager', array('tags' => array()));
+
+	$output .= "</div> <!-- payments -->";
+	
+	$output .= "<div style='background-color:" . $userdata->status . ";border:1px solid #999;padding:0.5em;'>" . t("My Status: ") . t($userdata->status) ."</div>";	
+	
+	if ($userdata->status != 'white') {
+		$output .= "<h2>" . t("Make new payment:") ."</h2>";
+		$output .= drupal_render(drupal_get_form('boucado_payment_pay_form'));
+	}
+	
+	return $output;
+}
+
+function boucado_payment_pay_form($form, &$form_state) {
+global $user;
+
+	$member=boucado_get_userdata($user->name);
+	$paypal_email = "payment-facilitator@boucado.space";
+	$item_name = "BOUCADO MEMBERSHIP";
+	$item_number = $member->username;
+	$amount = '15.00';
+
+	db_set_active('boucado_matrix');
+	$sql = "SELECT title, cost FROM boucado_members m, bonuslevels b WHERE m.bonuslevel = b.bid AND m.member_id='" . $user->uid . "'";
+	$levels = db_query($sql)->fetchAll();
+	$bonusjetzt = $levels[0]->cost;		
+
+	//Alle Bonuslevels (ausser FREE) holen:
+    $query = db_select('bonuslevels','b');
+    $query->fields('b', array('title', 'cost',));
+	$query->condition('title','FREE','<>');
+    $query->orderBy('order_index', 'ASC');
+    $results = $query->execute();
+
+	//define rows
+	$options = array();
+	foreach ($results as $result) {
+	    $options[$result->cost] = $result->title;
+	}
+	db_set_active();
+	
+	$form = array();
+
+    $form['amount'] = array( 
+        '#type' => 'select',
+        '#title' => t('Bonuslevel'),
+        '#description' => t('Pament for bonuslevel.'),
+        '#options' => $options,
+        '#default_value' => $bonusjetzt,
+    );
+	
+	$form['cmd'] = array('#type'=>'hidden', '#value'=>"_xclick",);
+	$form['business'] = array('#type'=>'hidden', '#value'=>$paypal_email,);
+	
+	$form['item_name'] = array('#type'=>'hidden', '#value'=>$item_name,);
+	$form['item_number'] = array('#type'=>'hidden', '#value'=>$item_number,);
+	 
+	$form['shipping'] = array('#type'=>'hidden', '#value'=>"0.00",);
+	$form['shipping2'] = array('#type'=>'hidden', '#value'=>"0.00",);
+	$form['currency_code'] = array('#type'=>'hidden', '#value'=>"EUR",);
+	 
+	$form['first_name'] = array('#type'=>'hidden', '#value'=>$member->first_name,);
+	$form['last_name'] = array('#type'=>'hidden', '#value'=>$member->last_name,);
+	$form['address1'] = array('#type'=>'hidden', '#value'=>$member->street,);
+	$form['city'] = array('#type'=>'hidden', '#value'=>$member->city,);
+	$form['state'] = array('#type'=>'hidden', '#value'=>$member->state,);
+	$form['zip'] = array('#type'=>'hidden', '#value'=>$member->postal,);
+	$form['lc'] = array('#type'=>'hidden', '#value'=>$member->country,);
+	$form['email'] = array('#type'=>'hidden', '#value'=>$member->account_id,);
+	$form['night_phone_a'] = array('#type'=>'hidden', '#value'=>$member->phone,);
+	
+	$form['return'] = array('#type'=>'hidden', '#value'=>'http://boucado.space/payment/success/paypal',);
+	$form['notify_url'] = array('#type'=>'hidden', '#value'=>'http://boucado.space/boucado_paypal_ipn.php',);
+	
+	$form['#method'] = 'post';
+	$form['#action']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+	
+    $form['submit'] = array('#type' => 'submit','#value' => t('Submit'),);
+	$form['submit']['#validate'][] = 'boucado_payment_pay_form_validate';
+	$form['#submit'][] = 'boucado_payment_pay_form_submit';
+	
+	return $form;
+}
+
+function boucado_payment_pay_form_validate($form, &$form_state) {
+	
+}
+
+function boucado_payment_pay_form_submit($form, &$form_state) {
+	$form_state['redirect']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+}
+
