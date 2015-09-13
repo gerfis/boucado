@@ -154,11 +154,9 @@ function boucado_menu() {
   
   $items['payment/withdraw'] = array(
     'title' => t('BOUCADO withdraw'),
-      'page callback' => 'drupal_get_form',
-      'page arguments' => array('boucado_payment_withdraw_form'),
-      'access callback' => TRUE,
+      'page callback' => 'boucado_payment_withdraw',
+      'page arguments' => array(0),
       'access arguments' => array('access own boucado'),
-      'type' => MENU_CALLBACK,      
   );  
   
   $items['payment/manually'] = array(
@@ -360,7 +358,7 @@ function boucado_user_presave(&$edit, $account, $category) {
     // Benutzer Rolle setzen
 	if ($role = user_role_load_by_name('FREE')) {
         user_multiple_role_edit(array($member->member_id), 'add_role', $role->rid);
-		drupal_set_message("Der Benutzer wurde der Status 'FREE' zugeteilt.");
+		drupal_set_message("Dem Benutzer wurde der Status 'FREE' zugeteilt.");
       }    
 /*    
  	// Member in Matrix platzieren:
@@ -421,6 +419,8 @@ global $user;
 		$thisuser->upline_first_name = 'BOUCADO';
 		$thisuser->upline_last_name = 'Admin';	
 		$thisuser->bonuslevel = 1;	
+		// Ablaufdaten holen
+		$thisuser->status = boucado_is_user_active($thisuser);
 		
 		return $thisuser;
 	}
@@ -517,7 +517,7 @@ global $user;
 		$thisuser->upline_last_name = 'Admin';
 		$thisuser->upline_bonuslevel = 5;
 	}
-	
+
 	// Ablaufdaten holen
 	$thisuser->status = boucado_is_user_active($thisuser);
 	
@@ -533,6 +533,7 @@ function boucado_is_user_active(&$thisuser) {
 	$sql = "SELECT DATE(date_time) from payments where member_id = " . $thisuser->member_id . " ORDER BY date_time DESC LIMIT 1";
 	$payments = db_query($sql)->fetchCol();
 		
+
 	if (!$payments) {
 		$thisuser->last_payment = "No payment made";
 		$thisuser->expiration_date = "No payment made";
@@ -667,12 +668,8 @@ function boucado_sendmail() {
 
 function boucado_mynetworks($net_id, $membername) {
 
-	$member = boucado_get_userdata($membername);
-	
-	db_set_active('boucado_matrix');
-		
 	$refdata = array();
-	
+/*	
 	// Sponsor Links:
 	$sponsorquery = db_select('network_members', 'm');
 	$sponsorquery
@@ -701,25 +698,85 @@ function boucado_mynetworks($net_id, $membername) {
 		$refdata['upline']['last_name'] = $member->upline_last_name;
 		$refdata['upline']['referral'] = $uplinerecord->referral;
 	}
-	
+*/
+	get_upline_networks($refdata, $net_id, $membername, 'sponsor', 1);
+	get_upline_networks($refdata, $net_id, $membername, 'upline', 1);
+
 	// Eigener Links:
+	$member = boucado_get_userdata($membername);
+	db_set_active('boucado_matrix');
 	$selfquery = db_select('network_members', 'm');
 	$selfquery
 		->fields('m')
 		->condition('m.net_id',$net_id,'=')
 		->condition('m.member_id',$member->member_id,'=');
 	$selfresult = $selfquery->execute();		
-	
+
 	foreach ($selfresult as $selfrecord) {
 		$refdata['self']['referral'] = $selfrecord->referral;
 	}
+	db_set_active();
+	
 	$refdata['self']['member_id'] = $member->member_id;
 	
-	db_set_active();
+
 	return $refdata;
 	
 }
 
+
+function get_upline_networks(&$refdata, $net_id, $membername, $type, $level) {
+
+	$member = boucado_get_userdata($membername);
+
+	if ($type == "sponsor") {
+
+		if (isset($refdata['sponsor']['referral'])) {return; }
+		// Sponsor Links:
+		db_set_active('boucado_matrix');
+		$sponsorquery = db_select('network_members', 'm');
+		$sponsorquery
+			->fields('m')
+			->condition('m.net_id',$net_id,'=')
+			->condition('m.member_id',$member->sponsor_id,'=');
+		$sponsorresult = $sponsorquery->execute();		
+	
+		foreach ($sponsorresult as $sponsorrecord) {
+			$refdata['sponsor']['first_name'] = $member->sponsor_first_name;
+			$refdata['sponsor']['last_name'] = $member->sponsor_last_name;
+			$refdata['sponsor']['referral'] = $sponsorrecord->referral;
+		}
+			
+		db_set_active();
+		if (!isset($refdata['sponsor']['referral'])) {
+			get_upline_networks($refdata, $net_id, $member->sponsor, $type, $level + 1);
+		}
+		
+	} else {
+
+		if (isset($refdata['upline']['referral'])) {return; }		
+		
+		// Upline Links:
+		db_set_active('boucado_matrix');		
+		$uplinequery = db_select('network_members', 'm');
+		$uplinequery
+			->fields('m')
+			->condition('m.net_id',$net_id,'=')
+			->condition('m.member_id',$member->upline_id,'=');
+		$uplineresult = $uplinequery->execute();		
+	
+		foreach ($uplineresult as $uplinerecord) {
+			$refdata['upline']['first_name'] = $member->upline_first_name;
+			$refdata['upline']['last_name'] = $member->upline_last_name;
+			$refdata['upline']['referral'] = $uplinerecord->referral;
+		}	
+		db_set_active();
+		if (!isset($refdata['upline']['referral'])) {
+			get_upline_networks($refdata, $net_id, $member->upline, $type, $level + 1);
+		}			
+	}
+			
+}
 
 function boucado_network_form($form, &$form_state, $infos) {
 		
@@ -1018,7 +1075,7 @@ function boucado_downline_tree(&$statistik, &$bonuslevels, $uid, $sponsor_id, $l
 
 function boucado_resettests() {
 	db_set_active('boucado_matrix');	
-	$result = db_query("DELETE FROM {boucado_members} WHERE member_id > 20 OR member_id=0");
+	$result = db_query("DELETE FROM {boucado_members} WHERE isTest = 1 OR member_id=0");
 	db_set_active();
 	$statistik = array();
 	$bonuslevels = array();
@@ -1038,14 +1095,15 @@ function new_TestMember($sponsor_id) {
 	// Insert in table
 	try {
 		$member_id = db_insert('boucado_members')
-			->fields(array('sponsor_id','bonuslevel','username','first_name','last_name'))
+			->fields(array('sponsor_id','bonuslevel','username','first_name','last_name','is_test'))
 			->values(array(
 				'sponsor_id' => $sponsor_id,
 				'bonuslevel' => 2,
 				'username' => $username,
 				'first_name' => $vorname[0],
 				'last_name' => $nachname[0],
-				'sponsored' => REQUEST_TIME))
+				'sponsored' => REQUEST_TIME,
+				'is_test' => 1))
 			->execute();
 		db_set_active();
 		return $member_id;
@@ -1256,7 +1314,7 @@ function boucado_payment_manually_form($form, &$form_state) {
 	//Query DB for Rows
 	db_set_active('boucado_matrix');
     $query = db_select('bonuslevels','b');
-    $query->fields('b', array('title', 'cost',));
+    $query->fields('b', array('title', 'brutto',));
 	$query->condition('title','FREE','<>');	
     $query->orderBy('order_index', 'ASC');
     $results = $query->execute();
@@ -1264,7 +1322,7 @@ function boucado_payment_manually_form($form, &$form_state) {
 	//define rows
 	$options = array();
 	foreach ($results as $result) {
-	    $options[$result->cost] = $result->title;
+	    $options[$result->brutto] = $result->title;
 	}
 	db_set_active();
 	
@@ -1349,8 +1407,6 @@ function boucado_payment_success($processor){
 
 function boucado_payment_pay($processor, $username,$transaction_id,$status,$amount,$danke = '') {
 		
-	print($amount);
-	
 	$member = boucado_get_userdata($username);
 	
 	db_set_active('boucado_matrix');
@@ -1369,7 +1425,7 @@ function boucado_payment_pay($processor, $username,$transaction_id,$status,$amou
 	};
 	
 	// bonuslevel aktualisieren
-	$result = db_query("SELECT title, bid FROM bonuslevels WHERE cost = '" . $amount ."'");
+	$result = db_query("SELECT title, bid FROM bonuslevels WHERE brutto = '" . $amount ."'");
 	$row = $result->fetchAssoc();
 	$bonustitle = $row['title'];
 	$bonuslevel = $row['bid'];
@@ -1381,7 +1437,7 @@ function boucado_payment_pay($processor, $username,$transaction_id,$status,$amou
 
 	// Alle Bonuslevels für die Rollen holen
     $query = db_select('bonuslevels','b');
-    $query->fields('b', array('title', 'cost',));
+    $query->fields('b', array('title', 'brutto',));
 	$query->condition('title','FREE','<>');
     $query->orderBy('order_index', 'ASC');
     $results = $query->execute();
@@ -1650,7 +1706,7 @@ function boucado_test_pay_all() {
 	foreach ($result as $record) {
 
 		db_set_active('boucado_matrix');
-		$sql = "SELECT cost FROM bonuslevels WHERE bid=" . $record->bonuslevel;
+		$sql = "SELECT brutto FROM bonuslevels WHERE bid=" . $record->bonuslevel;
 		$result = db_query($sql);
 		$bonus = $result->fetchCol();
 		
@@ -1718,7 +1774,7 @@ global $user;
 	 $result = $query->execute()->fetchAll();
 	db_set_active();
 
-
+	$table_rows = array();
   foreach($result as $row) {
     
     $table_rows[] = array(
@@ -1751,14 +1807,66 @@ global $user;
 	return $output; 	
 }
 
+function boucado_payment_withdraw() {
+global $user;
+	
+	$output = "<div id='payouts'>";
+
+	$headline = array(
+		array('data' => t('amount')),
+		array('data' => t('request date')),
+		array('data' => t('payout date')),
+		array('data' => t('transaction ID')),
+	);
+
+	db_set_active('boucado_matrix');
+	$query = db_select('payouts') 
+	 ->fields('payouts', array('amount', 'ask_date', 'pay_date', 'transaction_id'))    
+	 ->condition('member_id', $user->uid, '=')
+	 ->orderBy('payout_id','asc');
+
+	 $result = $query->execute()->fetchAll();
+	db_set_active();
+
+	$table_rows[] = array();
+	foreach($result as $row) {
+		$table_rows[] = array(
+			array('data' => $row->amount),
+			array('data' => $row->ask_date),
+			array('data' => $row->pay_date),
+			array('data' => $row->transaction_id),
+		);
+	}
+  
+  //return a themed schedule table
+  $output .= theme_table(array('header' => $headline,
+                           'rows' => $table_rows,
+                           'attributes' => array('class' => 'table_dfs', 'width' => '100%'),
+                           'caption' => '',
+                           'colgroups' => array(),
+                           'sticky' => FALSE,
+                           'empty' => 'No data is available',
+                          )); 
+						  
+	$output .= "<h2>" . t("Request new withdraw:") ."</h2>";
+	$output .= drupal_render(drupal_get_form('boucado_payment_withdraw_form'));
+								  
+	return $output;
+	
+}
 
 function boucado_payment_withdraw_form($form, &$form_state) {
 global $user; 
 	// Summe berechnen:
 	db_set_active('boucado_matrix');
-	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $user->name ."'";
+	$sql = "SELECT SUM(amount) FROM wallet WHERE to_id='" . $user->uid ."'";
 	$result = db_query($sql)->fetchCol();
 	$total = $result[0];
+	
+	$sql = "SELECT SUM(amount) FROM payouts WHERE pay_date IS NULL AND member_id='" . $user->uid ."'";
+	$result = db_query($sql)->fetchCol();
+	$requested = $result[0];
+	
 	db_set_active();
 	
 	$form = array();
@@ -1768,7 +1876,7 @@ global $user;
           '#title' => t('Amount to withdraw:'),
           '#size' => 10,
           '#maxlength' => 10,
-          '#default_value' => $total,
+          '#default_value' => $total - $requested,
         );
             
 
@@ -1790,10 +1898,15 @@ global $user;
 	$sql = "SELECT SUM(amount) as total FROM wallet WHERE to_name='" . $user->name ."'";
 	$result = db_query($sql)->fetchCol();
 	$total = $result[0];
+	
+	$sql = "SELECT SUM(amount) FROM payouts WHERE pay_date IS NULL AND member_id='" . $user->uid ."'";
+	$result = db_query($sql)->fetchCol();
+	$requested = $result[0];
+		
 	db_set_active();
 
 	$amount = $form_state['values']['amount'];
-	if ($amount > $total) {
+	if ($amount > $total - $requested) {
         form_set_error('amount', t("You don't have so much credit."));
    	}
 }
@@ -1804,8 +1917,9 @@ global $user;
 	db_set_active('boucado_matrix');
 	try {		
 		db_insert('payouts')
-		->fields(array('username','amount'))
+		->fields(array('member_id','username','amount'))
 		->values(array(
+		'member_id' => $user->uid,
 		'username' => $user->name,
 		'amount' => $amount,
 		))
@@ -1819,6 +1933,12 @@ global $user;
 	db_set_active();
 }
 
+
+function boucado_payment_withdraw_admin (){
+	
+// http://knackforge.com/blog/selvam/drupal-7-creating-editable-table-form-api
+	
+}
 
 function boucado_payments_mypayments($uid) {
 global $user;
@@ -1900,19 +2020,20 @@ function boucado_payment_pay_form($form, &$form_state) {
 global $user;
 
 	$member=boucado_get_userdata($user->name);
-	$paypal_email = "payment-facilitator@boucado.space";
+	//$paypal_email = "payment-facilitator@boucado.space";
+	$paypal_email = "payment@boucado.space";
 	$item_name = "BOUCADO MEMBERSHIP";
 	$item_number = $member->username;
-	$amount = '15.00';
+	$amount = '18.00';
 
 	db_set_active('boucado_matrix');
-	$sql = "SELECT title, cost FROM boucado_members m, bonuslevels b WHERE m.bonuslevel = b.bid AND m.member_id='" . $user->uid . "'";
+	$sql = "SELECT title, brutto FROM boucado_members m, bonuslevels b WHERE m.bonuslevel = b.bid AND m.member_id='" . $user->uid . "'";
 	$levels = db_query($sql)->fetchAll();
-	$bonusjetzt = $levels[0]->cost;		
+	$bonusjetzt = $levels[0]->brutto;		
 
 	//Alle Bonuslevels (ausser FREE) holen:
     $query = db_select('bonuslevels','b');
-    $query->fields('b', array('title', 'cost',));
+    $query->fields('b', array('title', 'brutto',));
 	$query->condition('title','FREE','<>');
     $query->orderBy('order_index', 'ASC');
     $results = $query->execute();
@@ -1920,7 +2041,7 @@ global $user;
 	//define rows
 	$options = array();
 	foreach ($results as $result) {
-	    $options[$result->cost] = $result->title;
+	    $options[$result->brutto] = $result->title;
 	}
 	db_set_active();
 	
@@ -1948,17 +2069,17 @@ global $user;
 	$form['last_name'] = array('#type'=>'hidden', '#value'=>$member->last_name,);
 	$form['address1'] = array('#type'=>'hidden', '#value'=>$member->street,);
 	$form['city'] = array('#type'=>'hidden', '#value'=>$member->city,);
-	$form['state'] = array('#type'=>'hidden', '#value'=>$member->state,);
 	$form['zip'] = array('#type'=>'hidden', '#value'=>$member->postal,);
 	$form['lc'] = array('#type'=>'hidden', '#value'=>$member->country,);
-	$form['email'] = array('#type'=>'hidden', '#value'=>$member->account_id,);
+	$form['email'] = array('#type'=>'hidden', '#value'=>$member->email,);
 	$form['night_phone_a'] = array('#type'=>'hidden', '#value'=>$member->phone,);
 	
 	$form['return'] = array('#type'=>'hidden', '#value'=>'http://boucado.space/payment/success/paypal',);
 	$form['notify_url'] = array('#type'=>'hidden', '#value'=>'http://boucado.space/boucado_paypal_ipn.php',);
 	
 	$form['#method'] = 'post';
-	$form['#action']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+	//$form['#action']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+	$form['#action']  = 'https://www.paypal.com/cgi-bin/webscr';
 	
     $form['submit'] = array('#type' => 'submit','#value' => t('Submit'),);
 	$form['submit']['#validate'][] = 'boucado_payment_pay_form_validate';
@@ -1972,6 +2093,7 @@ function boucado_payment_pay_form_validate($form, &$form_state) {
 }
 
 function boucado_payment_pay_form_submit($form, &$form_state) {
-	$form_state['redirect']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+	//$form_state['redirect']  = 'https://www.sandbox.paypal.com/cgi-bin/webscr';
+	$form_state['redirect']  = 'https://www.paypal.com/cgi-bin/webscr';
 }
 

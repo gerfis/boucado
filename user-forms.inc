@@ -281,7 +281,7 @@ function boucado_iban_validate($element, &$form_state) {
 
 function boucado_bic_validate($element, &$form_state) {
 	
-	if(!eregi("^([a-zA-Z]){4}([a-zA-Z]){2}([0-9a-zA-Z]){2}([0-9a-zA-Z]{3})?$", $element['#value'])) {
+	if(!preg_match("/^([a-zA-Z]){4}([a-zA-Z]){2}([0-9a-zA-Z]){2}([0-9a-zA-Z]{3})?$/", $element['#value'])) {
 		form_error($element, t('BIC ist ungültig.'));
 	} 
 }
