@@ -208,8 +208,8 @@ function boucado_menu() {
     );
 	
     $items['boucado/wallet'] = array(
-        'title' => t('My Wallet'),
-        'page arguments' => array('0'),  
+        'title' => t('My Wallet'),  
+        'page arguments' => array(2),          
         'page callback' => 'boucado_show_wallet',
         'access arguments' => array('access own boucado'),
         'type' => MENU_CALLBACK,
@@ -217,7 +217,7 @@ function boucado_menu() {
 	
     $items['boucado/wallet/%'] = array(
         'title' => t('My Wallet'),
-        'page arguments' => array('1'),  
+        'page arguments' => array(2),  
         'page callback' => 'boucado_show_wallet',
         'access arguments' => array('access all boucado'),
         'type' => MENU_CALLBACK,
@@ -233,9 +233,9 @@ function boucado_menu() {
   
   $items['boucado/mypayments'] = array(
     'title' => 'My Payments',
+    'page arguments' => array(2),      
     'description' => 'My BOUCADO Payments',
-    'page callback' => 'boucado_payments_mypayments',
-    'page arguments' => array(2),    
+    'page callback' => 'boucado_payments_mypayments', 
     'access arguments' => array('access own boucado'),
   );
 			
@@ -352,8 +352,8 @@ function boucado_check_sponsor($uid) {
 function boucado_user_presave(&$edit, $account, $category) {
 	// Benutzer bei der Aktivierung in die Matrix platzieren:
 	
-  if ($account->uid // user is not new
-      && $account->status === "0" && $edit['status']==1) { // user is being activated
+  if ($account->uid) { // user is not new
+	  if ($account->status === "0" && isset($edit['status']) && $edit['status']==1) { // user is being activated
 
     // Benutzer Rolle setzen
 	if ($role = user_role_load_by_name('FREE')) {
@@ -367,6 +367,7 @@ function boucado_user_presave(&$edit, $account, $category) {
 	drupal_set_message("Der Benutzer wurde in der Matrix platziert.");
 	// passiert jetzt erst beim Bezahlen
 */
+  	}
   }
 }
 
@@ -1730,7 +1731,7 @@ function boucado_test_pay_all_clear() {
 function boucado_show_wallet($uid) {
 global $user;
 	
-	if($uid!='0') { 
+	if($uid!='') { 
 		$username = boucado_get_username($uid);
 		$userdata = boucado_get_userdata($username);
 	} else {
