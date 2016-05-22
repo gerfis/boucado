@@ -299,6 +299,9 @@ global $theme;
 	$output .= "<br><br>" . t("Your level is: ") . $level;
 	$output .= "<br>" . t("Your balance is: ") . "€" . $total;
 	
+	if ($member->status == "red" || $level == "FREE") { 
+		$output .= "<br>" . l(t("Pay your fee Now!"),'/boucado/mypayments', array('html' => TRUE)) ;
+	}
 	return $output;
 }
 
